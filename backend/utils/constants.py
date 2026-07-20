@@ -30,6 +30,7 @@ SECTOR_CN_MAP: Dict[str, str] = {
     "Space": "太空",
     "Memory & Storage": "内存存储",
     "Defense & Aerospace": "国防航天",
+    "Other": "其他",
 }
 
 SECTOR_TW_MAP: Dict[str, str] = {
@@ -43,6 +44,7 @@ SECTOR_TW_MAP: Dict[str, str] = {
     "Space": "太空",
     "Memory & Storage": "記憶體存儲",
     "Defense & Aerospace": "國防航太",
+    "Other": "其他",
 }
 
 STOCK_UNIVERSE: List[Dict[str, str]] = [

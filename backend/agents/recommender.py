@@ -140,6 +140,7 @@ def run_full_analysis(
         "cache_status": {},
         "agent_summary": agent_state.get_summary(),
         "use_llm": use_llm,
+        "_debug_all_data": all_data,
     }
 
 

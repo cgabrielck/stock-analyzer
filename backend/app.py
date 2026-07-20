@@ -644,6 +644,24 @@ def run_analysis(params: Dict[str, Any]) -> None:
     else:
         st.success(t("app.complete", lang, n=len(st.session_state.all_rankings)))
 
+    debug_all = results.get("_debug_all_data", {})
+    with st.expander("🐛 Debug", expanded=False):
+        sd = len(st.session_state.scored_data)
+        ad = len(debug_all)
+        st.write(f"🔄 Pipeline: selected={len(params.get('selected_tickers', []))} → fetched={ad} → scored={sd} → ranked={len(st.session_state.all_rankings)}")
+        if debug_all:
+            skipped = []
+            for k, v in debug_all.items():
+                if "error" in v:
+                    skipped.append(f"{k}: error={str(v.get('error',''))[:30]}")
+                elif v.get("sector") is None:
+                    skipped.append(f"{k}: sector=None")
+            if skipped:
+                st.error(f"Skipped {len(skipped)} stocks:")
+                for s in skipped:
+                    st.write(f"  - {s}")
+        st.write(f"📊 Health keys: {len(results.get('source_health', {}))}")
+
 
 def _find_local_extrema(series, window: int = 5):
     local_max = (series == series.rolling(window, center=True).max())

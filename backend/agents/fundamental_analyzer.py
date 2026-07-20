@@ -99,7 +99,7 @@ def calculate_all_scores(
         if "error" in data:
             continue
         if data.get("sector") is None:
-            continue
+            data["sector"] = "Other"
         score, details, metrics_used = calculate_growth_score(data, custom_weights)
         data["growth_score"] = score
         data["score_details"] = details

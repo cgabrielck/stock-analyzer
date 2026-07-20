@@ -26,13 +26,17 @@ except Exception:
     pass
 
 _SEED_DATA: Dict[str, Any] = {}
-_seed_path = os.path.join(DATA_DIR, "seed_data.json")
-if os.path.exists(_seed_path):
-    try:
-        with open(_seed_path) as _f:
-            _SEED_DATA = json.load(_f)
-    except Exception:
-        pass
+try:
+    from agents.seed_data import SEED_DATA as _SD
+    _SEED_DATA = _SD
+except Exception:
+    _seed_path = os.path.join(DATA_DIR, "seed_data.json")
+    if os.path.exists(_seed_path):
+        try:
+            with open(_seed_path) as _f:
+                _SEED_DATA = json.load(_f)
+        except Exception:
+            pass
 
 REQUEST_TIMEOUT: int = 30
 MAX_WORKERS: int = 3

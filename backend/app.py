@@ -589,6 +589,10 @@ def show_source_health() -> None:
             st.sidebar.markdown(
                 f"<div style='font-size:0.7rem;margin:1px 0;'>{icon} {source} — {rate:.0f}%</div>",
                 unsafe_allow_html=True)
+        from agents.data_fetcher import _SEED_DATA
+        _seed_count = len(_SEED_DATA)
+        _seed_txt = f"🐢 seed={_seed_count}" if _seed_count else "🐢 seed=0 ⚠️"
+        st.sidebar.caption(_seed_txt)
         st.sidebar.caption(t("sidebar.last_update", lang, time=pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")))
         st.sidebar.caption(t("sidebar.data_from", lang))
         st.sidebar.caption(t("sidebar.version", lang))

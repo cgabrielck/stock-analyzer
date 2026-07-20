@@ -11,6 +11,11 @@ from utils.cache import cache
 from utils.price_utils import get_latest_price
 from agents.auto_upgrader import agent_state
 from agents.sec_analyzer import ticker_to_cik
+try:
+    from agents.china_data_fetcher import fetch_china_data, fetch_china_daily
+except ImportError:
+    fetch_china_data = None
+    fetch_china_daily = None
 
 _REQUEST_SESSION: requests.Session = requests.Session()
 _REQUEST_SESSION.headers.update(SEC_HEADERS)
@@ -161,6 +166,32 @@ def fetch_stock_data(ticker: str) -> Dict[str, Any]:
             agent_state.log_source_result(f"yfinance:{ticker}", False, last_error)
             if attempt < 2:
                 _time.sleep(2 ** attempt)
+
+    china = fetch_china_data(ticker) if fetch_china_data else None
+    if china:
+        china["sector"] = next(
+            (s["sector"] for s in STOCK_UNIVERSE if s["ticker"] == ticker), None
+        )
+        china["cik"] = ticker_to_cik(ticker)
+        china["fetched_at"] = _now_str()
+        china["data_quality"] = {
+            "from_cache": False,
+            "fetched_at": china["fetched_at"],
+            "metrics_available": _count_available_metrics(china),
+            "metrics_total": len(SCORING_KEYS),
+        }
+        seed = _SEED_DATA.get(ticker)
+        if seed:
+            for k in ("peg", "beta", "dividend_yield", "target_mean_price",
+                      "fifty_two_week_high", "fifty_two_week_low", "longName",
+                      "insider_net_shares", "esg_score", "recommendation_mean",
+                      "rating_label", "number_of_analysts", "held_percent_institutions",
+                      "ps_ratio", "pb_ratio", "ev_ebitda", "short_ratio",
+                      "target_high_price", "target_low_price", "forward_pe"):
+                if k not in china and k in seed:
+                    china[k] = seed[k]
+        agent_state.log_source_result(f"china:{ticker}", True)
+        return china
 
     fallback = _fetch_price_fallback(ticker)
     if fallback:

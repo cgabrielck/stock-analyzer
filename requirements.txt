@@ -11,3 +11,4 @@ openai>=1.0.0
 python-dotenv>=1.0.0
 plotly>=6.0.0
 altair>=5.0.0
+akshare>=1.18.0

@@ -1416,7 +1416,7 @@ def render_compare_tab() -> None:
 
     options = {}
     for s in scored:
-        label = f"{s['ticker']} ({s.get('longName', '')[:20]})"
+        label = f"{s['ticker']} ({(s.get('longName') or '')[:20]})"
         options[s["ticker"]] = label
 
     selected = st.multiselect(
@@ -1505,7 +1505,7 @@ def render_valuation_tab() -> None:
     rows: List[Dict[str, Any]] = []
     for s in scored:
         row: Dict[str, Any] = {t("valuation.ticker", lang): s["ticker"],
-                                t("valuation.name", lang): s.get("longName", "")[:20]}
+                                t("valuation.name", lang): (s.get("longName") or "")[:20]}
         for key, label in VALUATION_LABELS.items():
             val = s.get(key)
             row[label] = f"{val:.2f}" if val is not None else "N/A"

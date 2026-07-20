@@ -10,6 +10,19 @@ from utils.price_utils import get_latest_price
 from agents.auto_upgrader import agent_state
 from agents.sec_analyzer import ticker_to_cik
 
+_REQUEST_SESSION: requests.Session = requests.Session()
+_REQUEST_SESSION.headers.update(SEC_HEADERS)
+_REQUEST_SESSION.headers["User-Agent"] = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "KHTML, like Gecko Chrome/120.0.0.0 Safari/537.36"
+)
+
+try:
+    from yfinance.utils import YfConfig
+    YfConfig.session = _REQUEST_SESSION
+except Exception:
+    pass
+
 REQUEST_TIMEOUT: int = 15
 MAX_WORKERS: int = 5
 
@@ -40,7 +53,7 @@ def fetch_stock_data(ticker: str) -> Dict[str, Any]:
         return cached
 
     try:
-        stock = yf.Ticker(ticker)
+        stock = yf.Ticker(ticker, session=_REQUEST_SESSION)
         info = stock.info
         if not info or (info.get("regularMarketPrice") is None and info.get("currentPrice") is None):
             price_data = _fetch_price_fallback(ticker)
@@ -72,7 +85,9 @@ def fetch_stock_data(ticker: str) -> Dict[str, Any]:
             "pe_ratio": info.get("trailingPE"),
             "forward_pe": info.get("forwardPE"),
             "market_cap": info.get("marketCap"),
-            "sector": info.get("sector"),
+            "sector": info.get("sector") or next(
+                (s["sector"] for s in STOCK_UNIVERSE if s["ticker"] == ticker), None
+            ),
             "industry": info.get("industry"),
             "longName": info.get("longName"),
             "cik": cik,
@@ -215,8 +230,7 @@ def _extract_financials(financials: Any, balance_sheet: Any, cashflow: Any) -> D
 def _fetch_price_fallback(ticker: str) -> Optional[Dict[str, Any]]:
     try:
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
-        headers = {**SEC_HEADERS, "Referer": "https://finance.yahoo.com/"}
-        resp = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+        resp = _REQUEST_SESSION.get(url, timeout=REQUEST_TIMEOUT)
         resp.raise_for_status()
         data = resp.json()
         meta = data.get("chart", {}).get("result", [{}])[0].get("meta", {})
@@ -306,7 +320,7 @@ def fetch_news(ticker: str, max_items: int = 5) -> list[dict[str, Any]]:
         return cached
 
     try:
-        stock = yf.Ticker(ticker)
+        stock = yf.Ticker(ticker, session=_REQUEST_SESSION)
         raw_news = stock.news
         if not raw_news:
             return []
@@ -340,7 +354,7 @@ def fetch_financials_history(ticker: str) -> dict[str, list[float]]:
         return cached
 
     try:
-        stock = yf.Ticker(ticker)
+        stock = yf.Ticker(ticker, session=_REQUEST_SESSION)
         fin = stock.financials
         if fin is None or fin.empty:
             return {}
@@ -485,7 +499,7 @@ def fetch_industry_news(
 
     for sector_name, etf_ticker in INDUSTRY_NEWS_SOURCES.items():
         try:
-            stock = yf.Ticker(etf_ticker)
+            stock = yf.Ticker(etf_ticker, session=_REQUEST_SESSION)
             raw = stock.news
             if not raw:
                 continue

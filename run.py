@@ -8,7 +8,7 @@ import time
 
 PROXY_PORT = int(os.environ.get("PORT", 8500))
 STREAMLIT_PORT = 8501
-PWA_DIR = os.path.join(os.path.dirname(__file__), "backend", "pwa")
+PWA_DIR = os.path.join(os.path.dirname(__file__), "backend", "static")
 APP_PATH = os.path.join(os.path.dirname(__file__), "backend", "app.py")
 
 STATIC_MAP = {

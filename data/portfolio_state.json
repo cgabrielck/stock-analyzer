@@ -1,0 +1,26 @@
+{
+  "positions": {
+    "NVDA": {
+      "entry_price": 202.4887,
+      "entry_date": "2026-07-20T16:02:44.039789"
+    },
+    "AVGO": {
+      "entry_price": 370.0,
+      "entry_date": "2026-07-20T16:02:44.040936"
+    },
+    "LLY": {
+      "entry_price": 1176.53,
+      "entry_date": "2026-07-20T16:02:44.041297"
+    },
+    "GOOGL": {
+      "entry_price": 346.4,
+      "entry_date": "2026-07-20T16:02:44.041963"
+    },
+    "ISRG": {
+      "entry_price": 345.5775,
+      "entry_date": "2026-07-20T16:02:44.041639"
+    }
+  },
+  "capital": 100000,
+  "updated_at": "2026-07-20T16:59:52.905993"
+}

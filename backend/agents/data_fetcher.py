@@ -182,10 +182,13 @@ def fetch_stock_data(ticker: str) -> Dict[str, Any]:
         }
         seed = _SEED_DATA.get(ticker)
         if seed:
-            for k in ("peg", "beta", "dividend_yield", "target_mean_price",
-                      "fifty_two_week_high", "fifty_two_week_low", "longName",
-                      "insider_net_shares", "esg_score", "recommendation_mean",
-                      "rating_label", "number_of_analysts", "held_percent_institutions",
+            for k in ("revenue_growth", "eps_growth", "profit_margin", "peg",
+                      "roe", "debt_equity", "revenue_ttm", "net_income",
+                      "net_income_growth", "eps", "beta", "dividend_yield",
+                      "target_mean_price", "fifty_two_week_high",
+                      "fifty_two_week_low", "longName", "insider_net_shares",
+                      "esg_score", "recommendation_mean", "rating_label",
+                      "number_of_analysts", "held_percent_institutions",
                       "ps_ratio", "pb_ratio", "ev_ebitda", "short_ratio",
                       "target_high_price", "target_low_price", "forward_pe"):
                 if k not in china and k in seed:
@@ -199,6 +202,15 @@ def fetch_stock_data(ticker: str) -> Dict[str, Any]:
         fallback["ticker"] = ticker
         fallback["cik"] = cik
         fallback["fetched_at"] = _now_str()
+        fallback["sector"] = next(
+            (s["sector"] for s in STOCK_UNIVERSE if s["ticker"] == ticker), None
+        )
+        seed = _SEED_DATA.get(ticker)
+        if seed:
+            for k in ("revenue_growth", "eps_growth", "profit_margin", "peg",
+                      "roe", "debt_equity", "longName"):
+                if k not in fallback and k in seed:
+                    fallback[k] = seed[k]
         agent_state.log_source_result(f"fallback:{ticker}", True)
         return fallback
 

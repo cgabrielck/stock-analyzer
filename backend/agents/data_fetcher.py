@@ -1,10 +1,12 @@
 import concurrent.futures
+import json
+import os
 from typing import Any, Callable, Dict, Optional
 
 import yfinance as yf
 import requests
 
-from utils.constants import STOCK_UNIVERSE, SEC_HEADERS
+from utils.constants import STOCK_UNIVERSE, SEC_HEADERS, DATA_DIR
 from utils.cache import cache
 from utils.price_utils import get_latest_price
 from agents.auto_upgrader import agent_state
@@ -23,8 +25,17 @@ try:
 except Exception:
     pass
 
-REQUEST_TIMEOUT: int = 15
-MAX_WORKERS: int = 5
+_SEED_DATA: Dict[str, Any] = {}
+_seed_path = os.path.join(DATA_DIR, "seed_data.json")
+if os.path.exists(_seed_path):
+    try:
+        with open(_seed_path) as _f:
+            _SEED_DATA = json.load(_f)
+    except Exception:
+        pass
+
+REQUEST_TIMEOUT: int = 30
+MAX_WORKERS: int = 3
 
 
 import time as _time
@@ -52,105 +63,117 @@ def fetch_stock_data(ticker: str) -> Dict[str, Any]:
         }
         return cached
 
-    try:
-        stock = yf.Ticker(ticker, session=_REQUEST_SESSION)
-        info = stock.info
-        if not info or (info.get("regularMarketPrice") is None and info.get("currentPrice") is None):
-            price_data = _fetch_price_fallback(ticker)
-            if price_data:
-                info.update(price_data)
+    last_error: Optional[str] = None
 
-        financials = _safe_df(stock.financials)
-        balance_sheet = _safe_df(stock.balance_sheet)
-        cashflow = _safe_df(stock.cashflow)
-
-        cik = info.get("cik")
-        if cik is None:
-            cik = ticker_to_cik(ticker)
-
-        recommendation_mean = info.get("recommendationMean")
-        if recommendation_mean is not None:
-            rating_map = {1: "Strong Buy", 2: "Buy", 3: "Hold", 4: "Underperform", 5: "Sell"}
-            rating_label = rating_map.get(round(recommendation_mean), "N/A")
-        else:
-            rating_label = None
-
-        latest_price, price_session = get_latest_price(stock)
-
-        result: Dict[str, Any] = {
-            "ticker": ticker,
-            "fetched_at": _now_str(),
-            "price": latest_price,
-            "price_session": price_session,
-            "pe_ratio": info.get("trailingPE"),
-            "forward_pe": info.get("forwardPE"),
-            "market_cap": info.get("marketCap"),
-            "sector": info.get("sector") or next(
-                (s["sector"] for s in STOCK_UNIVERSE if s["ticker"] == ticker), None
-            ),
-            "industry": info.get("industry"),
-            "longName": info.get("longName"),
-            "cik": cik,
-            "peg": info.get("pegRatio"),
-            "ps_ratio": info.get("priceToSalesTrailing12Months"),
-            "pb_ratio": info.get("priceToBook"),
-            "ev_ebitda": info.get("enterpriseToEbitda"),
-            "dividend_yield": info.get("dividendYield"),
-            "short_ratio": info.get("shortRatio"),
-            "beta": info.get("beta"),
-            "fifty_two_week_high": info.get("fiftyTwoWeekHigh"),
-            "fifty_two_week_low": info.get("fiftyTwoWeekLow"),
-            "target_mean_price": info.get("targetMeanPrice"),
-            "target_high_price": info.get("targetHighPrice"),
-            "target_low_price": info.get("targetLowPrice"),
-            "recommendation_mean": recommendation_mean,
-            "rating_label": rating_label,
-            "number_of_analysts": info.get("numberOfAnalystOpinions"),
-            "held_percent_institutions": info.get("heldPercentInstitutions"),
-        }
-
-        if financials is not None:
-            result.update(_extract_financials(financials, balance_sheet, cashflow))
-
-        # --- ESG ---
+    for attempt in range(3):
         try:
-            esg_data = stock.sustainability
-            if esg_data is not None and not esg_data.empty:
-                result["esg_score"] = float(esg_data.loc["totalEsg", "realValue"]) if "totalEsg" in esg_data.index else None
+            stock = yf.Ticker(ticker, session=_REQUEST_SESSION)
+            info = stock.info
+            if not info or (info.get("regularMarketPrice") is None and info.get("currentPrice") is None):
+                price_data = _fetch_price_fallback(ticker)
+                if price_data:
+                    info.update(price_data)
+
+            financials = _safe_df(stock.financials)
+            balance_sheet = _safe_df(stock.balance_sheet)
+            cashflow = _safe_df(stock.cashflow)
+
+            cik = info.get("cik")
+            if cik is None:
+                cik = ticker_to_cik(ticker)
+
+            recommendation_mean = info.get("recommendationMean")
+            if recommendation_mean is not None:
+                rating_map = {1: "Strong Buy", 2: "Buy", 3: "Hold", 4: "Underperform", 5: "Sell"}
+                rating_label = rating_map.get(round(recommendation_mean), "N/A")
+            else:
+                rating_label = None
+
+            latest_price, price_session = get_latest_price(stock)
+
+            result: Dict[str, Any] = {
+                "ticker": ticker,
+                "fetched_at": _now_str(),
+                "price": latest_price,
+                "price_session": price_session,
+                "pe_ratio": info.get("trailingPE"),
+                "forward_pe": info.get("forwardPE"),
+                "market_cap": info.get("marketCap"),
+                "sector": info.get("sector") or next(
+                    (s["sector"] for s in STOCK_UNIVERSE if s["ticker"] == ticker), None
+                ),
+                "industry": info.get("industry"),
+                "longName": info.get("longName"),
+                "cik": cik,
+                "peg": info.get("pegRatio"),
+                "ps_ratio": info.get("priceToSalesTrailing12Months"),
+                "pb_ratio": info.get("priceToBook"),
+                "ev_ebitda": info.get("enterpriseToEbitda"),
+                "dividend_yield": info.get("dividendYield"),
+                "short_ratio": info.get("shortRatio"),
+                "beta": info.get("beta"),
+                "fifty_two_week_high": info.get("fiftyTwoWeekHigh"),
+                "fifty_two_week_low": info.get("fiftyTwoWeekLow"),
+                "target_mean_price": info.get("targetMeanPrice"),
+                "target_high_price": info.get("targetHighPrice"),
+                "target_low_price": info.get("targetLowPrice"),
+                "recommendation_mean": recommendation_mean,
+                "rating_label": rating_label,
+                "number_of_analysts": info.get("numberOfAnalystOpinions"),
+                "held_percent_institutions": info.get("heldPercentInstitutions"),
+            }
+
+            if financials is not None:
+                result.update(_extract_financials(financials, balance_sheet, cashflow))
+
+            try:
+                esg_data = stock.sustainability
+                if esg_data is not None and not esg_data.empty:
+                    result["esg_score"] = float(esg_data.loc["totalEsg", "realValue"]) if "totalEsg" in esg_data.index else None
+            except Exception as e:
+                agent_state.log_source_result(f"esg:{ticker}", False, str(e))
+
+            try:
+                insider = stock.insider_transactions
+                if insider is not None and not insider.empty:
+                    net = insider["shares"].sum() if "shares" in insider.columns else 0
+                    result["insider_net_shares"] = int(net)
+            except Exception as e:
+                agent_state.log_source_result(f"insider:{ticker}", False, str(e))
+
+            result["data_quality"] = {
+                "from_cache": False,
+                "fetched_at": result["fetched_at"],
+                "metrics_available": _count_available_metrics(result),
+                "metrics_total": len(SCORING_KEYS),
+            }
+
+            agent_state.log_source_result(f"yfinance:{ticker}", True)
+            cache.set(ticker, "info", result)
+            return result
+
         except Exception as e:
-            agent_state.log_source_result(f"esg:{ticker}", False, str(e))
+            last_error = str(e)
+            agent_state.log_source_result(f"yfinance:{ticker}", False, last_error)
+            if attempt < 2:
+                _time.sleep(2 ** attempt)
 
-        # --- Insider transactions ---
-        try:
-            insider = stock.insider_transactions
-            if insider is not None and not insider.empty:
-                net = insider["shares"].sum() if "shares" in insider.columns else 0
-                result["insider_net_shares"] = int(net)
-        except Exception as e:
-            agent_state.log_source_result(f"insider:{ticker}", False, str(e))
+    fallback = _fetch_price_fallback(ticker)
+    if fallback:
+        cik = ticker_to_cik(ticker)
+        fallback["ticker"] = ticker
+        fallback["cik"] = cik
+        fallback["fetched_at"] = _now_str()
+        agent_state.log_source_result(f"fallback:{ticker}", True)
+        return fallback
 
-        result["data_quality"] = {
-            "from_cache": False,
-            "fetched_at": result["fetched_at"],
-            "metrics_available": _count_available_metrics(result),
-            "metrics_total": len(SCORING_KEYS),
-        }
+    seed = _SEED_DATA.get(ticker)
+    if seed:
+        seed["fetched_at"] = _now_str()
+        agent_state.log_source_result(f"seed:{ticker}", True)
+        return seed
 
-        agent_state.log_source_result(f"yfinance:{ticker}", True)
-        cache.set(ticker, "info", result)
-        return result
-
-    except Exception as e:
-        agent_state.log_source_result(f"yfinance:{ticker}", False, str(e))
-        fallback = _fetch_price_fallback(ticker)
-        if fallback:
-            cik = ticker_to_cik(ticker)
-            fallback["ticker"] = ticker
-            fallback["cik"] = cik
-            fallback["fetched_at"] = _now_str()
-            agent_state.log_source_result(f"fallback:{ticker}", True)
-            return fallback
-        return {"ticker": ticker, "error": str(e), "sector": None}
+    return {"ticker": ticker, "error": last_error or "unknown", "sector": None}
 
 
 def _safe_df(df: Any) -> Optional[Any]:

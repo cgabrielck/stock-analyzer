@@ -11,4 +11,6 @@ build/
 .DS_Store
 backend/data/cache/
 backend/data/agent_state.json
+data/portfolio_state.json
+data/trade_journal.json
 *.log

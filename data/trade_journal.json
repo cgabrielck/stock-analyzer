@@ -150,5 +150,13 @@
     "price": 346.4,
     "shares": 51,
     "reason": "Portfolio allocation 18.0%"
+  },
+  {
+    "date": "2026-07-20T17:31:36.306657",
+    "ticker": "NOW",
+    "action": "buy",
+    "price": 103.14,
+    "shares": 174,
+    "reason": "Portfolio allocation 18.0%"
   }
 ]

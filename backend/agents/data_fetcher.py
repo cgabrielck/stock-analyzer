@@ -180,21 +180,49 @@ def fetch_stock_data(ticker: str) -> Dict[str, Any]:
             "metrics_available": _count_available_metrics(china),
             "metrics_total": len(SCORING_KEYS),
         }
-        seed = _SEED_DATA.get(ticker)
-        if seed:
-            for k in ("revenue_growth", "eps_growth", "profit_margin", "peg",
-                      "roe", "debt_equity", "revenue_ttm", "net_income",
-                      "net_income_growth", "eps", "beta", "dividend_yield",
-                      "target_mean_price", "fifty_two_week_high",
-                      "fifty_two_week_low", "longName", "insider_net_shares",
-                      "esg_score", "recommendation_mean", "rating_label",
-                      "number_of_analysts", "held_percent_institutions",
-                      "ps_ratio", "pb_ratio", "ev_ebitda", "short_ratio",
-                      "target_high_price", "target_low_price", "forward_pe"):
-                if k not in china and k in seed:
-                    china[k] = seed[k]
+        yahoo_fund = _fetch_yahoo_fundamentals(ticker)
+        if yahoo_fund:
+            for k, v in yahoo_fund.items():
+                if k != "_source" and k not in china:
+                    china[k] = v
+        else:
+            seed = _SEED_DATA.get(ticker)
+            if seed:
+                for k in ("revenue_growth", "eps_growth", "profit_margin", "peg",
+                          "roe", "debt_equity", "revenue_ttm", "net_income",
+                          "net_income_growth", "eps", "beta", "dividend_yield",
+                          "target_mean_price", "fifty_two_week_high",
+                          "fifty_two_week_low", "longName", "insider_net_shares",
+                          "esg_score", "recommendation_mean", "rating_label",
+                          "number_of_analysts", "held_percent_institutions",
+                          "ps_ratio", "pb_ratio", "ev_ebitda", "short_ratio",
+                          "target_high_price", "target_low_price", "forward_pe"):
+                    if k not in china and k in seed:
+                        china[k] = seed[k]
         agent_state.log_source_result(f"china:{ticker}", True)
         return china
+
+    yahoo_fund = _fetch_yahoo_fundamentals(ticker)
+    if yahoo_fund:
+        chart = _fetch_price_fallback(ticker)
+        price = chart.get("price") if chart else yahoo_fund.get("price")
+        yahoo_fund["ticker"] = ticker
+        yahoo_fund["cik"] = ticker_to_cik(ticker)
+        yahoo_fund["fetched_at"] = _now_str()
+        yahoo_fund["sector"] = next(
+            (s["sector"] for s in STOCK_UNIVERSE if s["ticker"] == ticker), None
+        )
+        if price:
+            yahoo_fund["price"] = price
+        yahoo_fund["data_quality"] = {
+            "from_cache": False,
+            "fetched_at": yahoo_fund["fetched_at"],
+            "metrics_available": _count_available_metrics(yahoo_fund),
+            "metrics_total": len(SCORING_KEYS),
+        }
+        del yahoo_fund["_source"]
+        agent_state.log_source_result(f"yahoo:{ticker}", True)
+        return yahoo_fund
 
     fallback = _fetch_price_fallback(ticker)
     if fallback:
@@ -307,6 +335,103 @@ def _fetch_price_fallback(ticker: str) -> Optional[Dict[str, Any]]:
         price = meta.get("regularMarketPrice") or meta.get("previousClose")
         if price:
             return {"price": price, "sector": None, "_fallback": True}
+    except Exception:
+        pass
+    return None
+
+
+def _fetch_yahoo_fundamentals(ticker: str) -> Optional[Dict[str, Any]]:
+    """Fetch fundamental data from Yahoo quoteSummary API (same domain as chart, may work on cloud)."""
+    try:
+        url = (
+            f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{ticker}"
+            f"?modules=financialData,defaultKeyStatistics,summaryDetail,price"
+        )
+        resp = _REQUEST_SESSION.get(url, timeout=REQUEST_TIMEOUT)
+        resp.raise_for_status()
+        data = resp.json()
+        result = data.get("quoteSummary", {}).get("result", [{}])[0]
+        if not result:
+            return None
+
+        fin = result.get("financialData", {}) or {}
+        stat = result.get("defaultKeyStatistics", {}) or {}
+        detail = result.get("summaryDetail", {}) or {}
+
+        fields: Dict[str, Any] = {}
+
+        raw = fin.get("revenueGrowth", {}).get("raw")
+        if raw is not None:
+            fields["revenue_growth"] = raw * 100
+        raw = fin.get("earningsGrowth", {}).get("raw")
+        if raw is not None:
+            fields["eps_growth"] = raw * 100
+        raw = fin.get("profitMargins", {}).get("raw")
+        if raw is not None:
+            fields["profit_margin"] = raw * 100
+        raw = fin.get("returnOnEquity", {}).get("raw")
+        if raw is not None:
+            fields["roe"] = raw * 100
+        raw = fin.get("debtToEquity", {}).get("raw")
+        if raw is not None:
+            fields["debt_equity"] = raw
+        raw = fin.get("pegRatio", {}).get("raw")
+        if raw is not None:
+            fields["peg"] = raw
+        raw = stat.get("beta", {}).get("raw")
+        if raw is not None:
+            fields["beta"] = raw
+        raw = detail.get("dividendYield", {}).get("raw")
+        if raw is not None:
+            fields["dividend_yield"] = raw
+        raw = fin.get("targetMeanPrice", {}).get("raw")
+        if raw is not None:
+            fields["target_mean_price"] = raw
+        raw = detail.get("trailingPE", {}).get("raw")
+        if raw is not None:
+            fields["pe_ratio"] = raw
+        raw = detail.get("forwardPE", {}).get("raw")
+        if raw is not None:
+            fields["forward_pe"] = raw
+        raw = detail.get("marketCap", {}).get("raw")
+        if raw is not None:
+            fields["market_cap"] = raw
+        raw = stat.get("shortRatio", {}).get("raw")
+        if raw is not None:
+            fields["short_ratio"] = raw
+        raw = fin.get("recommendationMean", {}).get("raw")
+        if raw is not None:
+            fields["recommendation_mean"] = raw
+            rating_map = {1: "Strong Buy", 2: "Buy", 3: "Hold", 4: "Underperform", 5: "Sell"}
+            fields["rating_label"] = rating_map.get(round(raw), "N/A")
+        raw = fin.get("numberOfAnalystOpinions", {}).get("raw")
+        if raw is not None:
+            fields["number_of_analysts"] = raw
+        raw = stat.get("heldPercentInstitutions", {}).get("raw")
+        if raw is not None:
+            fields["held_percent_institutions"] = raw
+        raw = detail.get("fiftyTwoWeekHigh", {}).get("raw")
+        if raw is not None:
+            fields["fifty_two_week_high"] = raw
+        raw = detail.get("fiftyTwoWeekLow", {}).get("raw")
+        if raw is not None:
+            fields["fifty_two_week_low"] = raw
+        raw = fin.get("targetHighPrice", {}).get("raw")
+        if raw is not None:
+            fields["target_high_price"] = raw
+        raw = fin.get("targetLowPrice", {}).get("raw")
+        if raw is not None:
+            fields["target_low_price"] = raw
+        raw = stat.get("enterpriseToEbitda", {}).get("raw")
+        if raw is not None:
+            fields["ev_ebitda"] = raw
+        lname = result.get("price", {}).get("longName")
+        if lname and isinstance(lname, str):
+            fields["longName"] = lname
+
+        if fields:
+            fields["_source"] = "yahoo_fundamentals"
+            return fields
     except Exception:
         pass
     return None

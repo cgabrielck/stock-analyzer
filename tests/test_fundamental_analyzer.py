@@ -120,10 +120,11 @@ def test_calculate_all_scores_skips_errors() -> None:
     assert len(scored) == 1
 
 
-def test_calculate_all_scores_skips_no_sector() -> None:
+def test_calculate_all_scores_assigns_other_to_missing_sector() -> None:
     all_data = {
         "A": {"ticker": "A", "revenue_growth": 10.0, "sector": None},
         "B": {"ticker": "B", "revenue_growth": 10.0, "sector": "Tech"},
     }
     scored = calculate_all_scores(all_data)
-    assert len(scored) == 1
+    assert len(scored) == 2
+    assert next(stock for stock in scored if stock["ticker"] == "A")["sector"] == "Other"

@@ -31,14 +31,25 @@ from agents.technical_analyzer import (
     _compute_bb,
     _compute_atr,
 )
+from agents.portfolio_manager import (
+    DEFAULT_STOP_LOSS_PCT,
+    DEFAULT_UPISDE_PCT,
+    kelly_fraction,
+    normalize_capped_weights,
+)
+from agents.market_regime import classify_market_regime
+from backtesting.calibration import ExpandingScoreCalibrator, save_calibration_snapshot
+from backtesting.universe import HistoricalUniverse
 from utils.cache import cache
 from utils.constants import STOCK_UNIVERSE, SCORING_WEIGHTS
+from utils.selection import select_recommendations
 
 FILING_LAG_DAYS: int = 60
 MAX_WORKERS: int = 5
 DEFAULT_START: str = "2020-01-01"
 TECH_CANDIDATES: int = 15
 ENTRY_THRESHOLD: float = 60.0
+FILL_THRESHOLD: float = 50.0
 MAX_PER_SECTOR: int = 2
 TOP_N: int = 5
 
@@ -52,7 +63,7 @@ ProgressCb = Optional[Callable[[int, int, str], None]]
 def _fetch_single_price(ticker: str, start: str, end: str) -> Optional[pd.DataFrame]:
     try:
         stock = yf.Ticker(ticker)
-        df = stock.history(start=start, end=end)
+        df = stock.history(start=start, end=end, auto_adjust=True)
         if df is not None and not df.empty:
             return df
     except Exception:
@@ -133,7 +144,8 @@ def _extract_fundamentals_as_of(
     if qf is None or qf.empty:
         return {}
 
-    idx, prev = _find_recent_quarter(qf, as_of)
+    filing_as_of = as_of.tz_localize(None) if as_of.tzinfo is not None else as_of
+    idx, prev = _find_recent_quarter(qf, filing_as_of)
     if idx < 0 or prev < 0:
         # Never substitute a future report for an unavailable historical one.
         return {}
@@ -166,10 +178,11 @@ def _extract_fundamentals_as_of(
                 result["eps_growth"] = float((eps_current / eps_prev - 1) * 100)
 
         if bs is not None and not bs.empty:
-            bs_available = [c for c in bs.columns if pd.Timestamp(c) <= as_of - timedelta(days=FILING_LAG_DAYS)]
+            cutoff = filing_as_of - timedelta(days=FILING_LAG_DAYS)
+            bs_available = [c for c in bs.columns if pd.Timestamp(c).tz_localize(None) <= cutoff]
             if not bs_available:
                 return result
-            bs_col = min(bs_available, key=lambda c: abs((pd.Timestamp(c) - (as_of - timedelta(days=FILING_LAG_DAYS))).days))
+            bs_col = min(bs_available, key=lambda c: abs((pd.Timestamp(c).tz_localize(None) - cutoff).days))
             bs_idx = list(bs.columns).index(bs_col)
             equity = None
             if "Stockholders Equity" in bs.index:
@@ -194,7 +207,12 @@ def _extract_fundamentals_as_of(
                 result["debt_equity"] = round(total_debt / equity, 4)
 
         if price_df is not None and not price_df.empty:
-            price_as_of = price_df[price_df.index <= as_of]
+            price_as_of_timestamp = as_of
+            if price_df.index.tz is not None and as_of.tzinfo is None:
+                price_as_of_timestamp = as_of.tz_localize(price_df.index.tz)
+            elif price_df.index.tz is None and as_of.tzinfo is not None:
+                price_as_of_timestamp = as_of.tz_localize(None)
+            price_as_of = price_df[price_df.index <= price_as_of_timestamp]
             if price_as_of.empty:
                 return result
             current_price = float(price_as_of["Close"].iloc[-1])
@@ -202,7 +220,8 @@ def _extract_fundamentals_as_of(
                 pe = current_price / abs(float(eps_current)) if eps_current != 0 else None
                 eps_g = result.get("eps_growth", 0)
                 if pe is not None and eps_g and eps_g > 0:
-                    result["peg"] = round(pe / (eps_g / 100.0), 2)
+                    # Conventional PEG divides P/E by percentage growth (20, not 0.20).
+                    result["peg"] = round(pe / eps_g, 2)
 
     except (IndexError, KeyError):
         pass
@@ -320,6 +339,12 @@ class BacktestResult:
         self.best_month_pct: float = 0.0
         self.worst_month_pct: float = 0.0
         self.volatility_pct: float = 0.0
+        self.total_transaction_cost: float = 0.0
+        self.total_turnover: float = 0.0
+        self.equity_curve: List[Dict[str, Any]] = []
+        self.coverage: Dict[str, Any] = {}
+        self.warnings: List[Dict[str, str]] = []
+        self.calibration: Dict[str, Any] = {}
 
     @property
     def num_periods(self) -> int:
@@ -331,20 +356,34 @@ def run_backtest(
     end: Optional[str] = None,
     use_fundamentals: bool = True,
     progress_callback=None,
+    *,
+    selected_tickers: Optional[List[str]] = None,
+    weighting: str = "equal",
+    transaction_cost_bps: float = 15.0,
+    initial_capital: float = 10000.0,
+    persist_calibration: bool = False,
 ) -> BacktestResult:
+    if weighting not in {"equal", "calibrated_kelly"}:
+        raise ValueError("weighting must be 'equal' or 'calibrated_kelly'")
+    if transaction_cost_bps < 0:
+        raise ValueError("transaction_cost_bps cannot be negative")
+
     end_date = end or datetime.now().strftime("%Y-%m-%d")
     result = BacktestResult()
-
-    tickers = [s["ticker"] for s in STOCK_UNIVERSE]
-    all_tickers = tickers + ["SPY"]
+    universe = HistoricalUniverse(selected_tickers=selected_tickers)
+    tickers = universe.all_tickers()
+    all_tickers = tickers + ["SPY", "^VIX"]
 
     if progress_callback:
         progress_callback(1, 0, "Fetching historical prices...")
 
-    price_data = fetch_price_data(all_tickers, start, end_date)
+    warmup_start = (pd.Timestamp(start) - pd.DateOffset(months=6)).strftime("%Y-%m-%d")
+    fetch_end = (pd.Timestamp(end_date) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    price_data = fetch_price_data(all_tickers, warmup_start, fetch_end)
 
     if "SPY" not in price_data:
         result.periods = []
+        result.warnings.append({"code": "missing_benchmark", "message": "SPY price data is unavailable."})
         return result
 
     if progress_callback:
@@ -361,18 +400,37 @@ def run_backtest(
     reb_dates_tz = [d.tz_localize(sample_tz) if sample_tz else d for d in rebalance_dates]
 
     sector_map = {s["ticker"]: s["sector"] for s in STOCK_UNIVERSE}
+    tier_map = {s["ticker"]: s.get("universe_tier", "core") for s in STOCK_UNIVERSE}
 
     fund_data: Dict[str, Optional[pd.DataFrame]] = {}
     bs_data: Dict[str, Optional[pd.DataFrame]] = {}
     if use_fundamentals:
         if progress_callback:
             progress_callback(1, 0, "Fetching quarterly fundamentals & balance sheets...")
-        for t in tickers:
-            fund_data[t] = _fetch_single_fundamentals(t)
-            bs_data[t] = _fetch_single_balance_sheet(t)
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            fund_futures = {executor.submit(_fetch_single_fundamentals, ticker): ticker for ticker in tickers}
+            bs_futures = {executor.submit(_fetch_single_balance_sheet, ticker): ticker for ticker in tickers}
+            for future, ticker in fund_futures.items():
+                try:
+                    fund_data[ticker] = future.result()
+                except Exception:
+                    fund_data[ticker] = None
+            for future, ticker in bs_futures.items():
+                try:
+                    bs_data[ticker] = future.result()
+                except Exception:
+                    bs_data[ticker] = None
 
     portfolio_values: List[float] = []
     spy_values: List[float] = []
+    portfolio_value = initial_capital
+    spy_value = initial_capital
+    prior_end_weights: Dict[str, float] = {}
+    calibrator = ExpandingScoreCalibrator()
+    pending_observations: List[Tuple[float, bool]] = []
+    technical_coverage: List[float] = []
+    fundamental_coverage: List[float] = []
+    missing_exit_count = 0
 
     for i, (reb_date, reb_date_tz) in enumerate(zip(rebalance_dates, reb_dates_tz)):
         # A final partial month has no comparable forward return.
@@ -382,9 +440,14 @@ def run_backtest(
             progress_callback(i + 1, len(rebalance_dates),
                               f"Rebalancing {reb_date.date()}...")
 
+        calibrator.add_many(pending_observations)
+        pending_observations = []
         scored: List[Dict[str, Any]] = []
+        period_universe = universe.tickers_for(reb_date.date())
+        technical_count = 0
+        fundamental_count = 0
 
-        for ticker in tickers:
+        for ticker in period_universe:
             df = price_data.get(ticker)
             if df is None or df.empty:
                 continue
@@ -395,6 +458,7 @@ def run_backtest(
             tech = _score_stock_technical(hist, ticker)
             if tech.get("error"):
                 continue
+            technical_count += 1
 
             tech_score = tech.get("total_score", 0)
             score = tech_score
@@ -410,12 +474,14 @@ def run_backtest(
                     from agents.fundamental_analyzer import calculate_growth_score
                     gscore_val, details, metrics_used = calculate_growth_score(fund)
                     if metrics_used > 0:
+                        fundamental_count += 1
                         fund_score = gscore_val
                         score = round(gscore_val * 0.7 + tech_score * 0.3, 1)
 
             entry = {
                 "ticker": ticker,
                 "sector": sector_map.get(ticker, "Unknown"),
+                "universe_tier": tier_map.get(ticker, "satellite"),
                 "total_score": score,
                 "tech_score": tech_score,
                 "fund_score": fund_score,
@@ -429,36 +495,46 @@ def run_backtest(
             scored.append(entry)
 
         scored.sort(key=lambda x: x.get("total_score", 0) or 0, reverse=True)
-        scored = [s for s in scored if (s.get("total_score") or 0) >= ENTRY_THRESHOLD]
-
-        sector_count: Dict[str, int] = {}
-        picks: List[Dict[str, Any]] = []
-        for s in scored:
-            sec = s.get("sector", "Unknown")
-            if sector_count.get(sec, 0) < MAX_PER_SECTOR:
-                picks.append(s)
-                sector_count[sec] = sector_count.get(sec, 0) + 1
-            if len(picks) >= TOP_N:
-                break
+        spy_history = price_data["SPY"][price_data["SPY"].index <= reb_date_tz]["Close"]
+        vix_df = price_data.get("^VIX")
+        vix_history = vix_df[vix_df.index <= reb_date_tz]["Close"] if vix_df is not None else None
+        market_regime = classify_market_regime(spy_history, vix_history)
+        picks = select_recommendations(
+            scored,
+            entry_threshold=market_regime.get("entry_threshold", ENTRY_THRESHOLD),
+            fill_threshold=market_regime.get("fill_threshold", FILL_THRESHOLD),
+            max_per_sector=MAX_PER_SECTOR,
+            top_n=TOP_N,
+            max_satellite=1,
+            satellite_threshold=65.0,
+        )
+        technical_coverage.append(technical_count / len(period_universe) if period_universe else 0.0)
+        fundamental_coverage.append(fundamental_count / technical_count if technical_count else 0.0)
 
         next_date_tz = reb_date_tz + pd.DateOffset(months=1)
-        pick_returns: List[float] = []
+        forward_returns: Dict[str, float] = {}
+        all_forward_returns: Dict[str, float] = {}
+        for stock in scored:
+            ticker = stock["ticker"]
+            entry_price = stock.get("price")
+            df = price_data.get(ticker)
+            if not entry_price or df is None:
+                continue
+            exit_slice = df[(df.index > reb_date_tz) & (df.index <= next_date_tz)]
+            if exit_slice.empty:
+                continue
+            exit_price = float(exit_slice["Close"].iloc[-1])
+            all_forward_returns[ticker] = exit_price / entry_price - 1
+        pending_observations = [
+            (stock["total_score"], all_forward_returns[stock["ticker"]] > 0)
+            for stock in scored if stock["ticker"] in all_forward_returns
+        ]
+        forward_returns = {
+            pick["ticker"]: all_forward_returns[pick["ticker"]]
+            for pick in picks if pick["ticker"] in all_forward_returns
+        }
         for pick in picks:
             ticker = pick["ticker"]
-            entry_price = pick.get("price")
-            if entry_price is None:
-                continue
-
-            df = price_data.get(ticker)
-            if df is None:
-                continue
-
-            exit_slice = df[(df.index > reb_date_tz) & (df.index <= next_date_tz)]
-            if not exit_slice.empty:
-                exit_price = float(exit_slice["Close"].iloc[-1])
-                ret = (exit_price / entry_price - 1) * 100
-                pick_returns.append(ret)
-
             result.tickers_picked[ticker] = result.tickers_picked.get(ticker, 0) + 1
 
         for pick in picks:
@@ -473,7 +549,35 @@ def run_backtest(
             if not spy_entry_slice.empty and not spy_exit_slice.empty:
                 spy_entry = float(spy_entry_slice["Close"].iloc[-1])
                 spy_exit = float(spy_exit_slice["Close"].iloc[-1])
-                spy_ret = (spy_exit / spy_entry - 1) * 100
+                spy_ret = spy_exit / spy_entry - 1
+
+        weights, calibration_ready = _target_weights(
+            picks,
+            weighting,
+            calibrator,
+            target_allocation=market_regime.get("target_allocation", 0.90),
+        )
+        turnover = _calculate_turnover(prior_end_weights, weights)
+        cost_rate = turnover * transaction_cost_bps / 10000.0
+        transaction_cost = portfolio_value * cost_rate
+        complete_returns = len(forward_returns) == len(picks)
+        gross_return = sum(weights.get(ticker, 0.0) * value for ticker, value in forward_returns.items())
+        net_return: Optional[float] = None
+        if picks and complete_returns:
+            net_return = (1.0 - cost_rate) * (1.0 + gross_return) - 1.0
+            portfolio_value *= 1.0 + net_return
+            portfolio_values.append(portfolio_value)
+            prior_end_weights = _drift_weights(weights, forward_returns, gross_return)
+            result.total_transaction_cost += transaction_cost
+            result.total_turnover += turnover
+        elif picks:
+            missing_exit_count += len(picks) - len(forward_returns)
+            transaction_cost = 0.0
+            turnover = 0.0
+
+        if spy_ret is not None and net_return is not None:
+            spy_value *= 1.0 + spy_ret
+            spy_values.append(spy_value)
 
         fund_scores = [p.get("fund_score") for p in picks if p.get("fund_score") is not None]
         period = {
@@ -483,8 +587,23 @@ def run_backtest(
             "avg_tech_score": round(sum(p.get("tech_score", 0) for p in picks) / len(picks), 1) if picks else 0,
             "avg_fund_score": round(sum(fund_scores) / len(fund_scores), 1) if fund_scores else None,
             "num_picks": len(picks),
-            "avg_return": round(sum(pick_returns) / len(pick_returns), 2) if pick_returns else None,
-            "spy_return": round(spy_ret, 2) if spy_ret is not None else None,
+            "avg_return": round(net_return * 100, 2) if net_return is not None else None,
+            "gross_return": round(gross_return * 100, 2) if complete_returns and picks else None,
+            "net_return": round(net_return * 100, 2) if net_return is not None else None,
+            "spy_return": round(spy_ret * 100, 2) if spy_ret is not None else None,
+            "weights": {ticker: round(weight, 4) for ticker, weight in weights.items()},
+            "cash_weight": round(1.0 - sum(weights.values()), 4),
+            "turnover": round(turnover, 4),
+            "transaction_cost": round(transaction_cost, 2),
+            "portfolio_value": round(portfolio_value, 2),
+            "calibration_ready": calibration_ready,
+            "market_regime": market_regime,
+            "coverage": {
+                "universe": len(period_universe),
+                "technical": technical_count,
+                "fundamental": fundamental_count,
+                "scored": len(scored),
+            },
         }
 
         if period["avg_return"] is not None and period["spy_return"] is not None:
@@ -497,28 +616,118 @@ def run_backtest(
                 result.losses += 1
 
         result.periods.append(period)
+        if net_return is not None:
+            result.equity_curve.append({
+                "date": reb_date,
+                "portfolio": round(portfolio_value, 2),
+                "spy": round(spy_value, 2),
+            })
 
-        if pick_returns:
-            avg_ret = sum(pick_returns) / len(pick_returns)
-            if portfolio_values:
-                portfolio_values.append(portfolio_values[-1] * (1 + avg_ret / 100))
-            else:
-                portfolio_values.append(10000 * (1 + avg_ret / 100))
+    calibrator.add_many(pending_observations)
+    result.coverage = {
+        "requested_tickers": len(tickers),
+        "tickers_with_prices": sum(ticker in price_data for ticker in tickers),
+        "avg_technical_pct": round(float(np.mean(technical_coverage)) * 100, 1) if technical_coverage else 0.0,
+        "avg_fundamental_pct": round(float(np.mean(fundamental_coverage)) * 100, 1) if fundamental_coverage else 0.0,
+        "missing_exit_prices": missing_exit_count,
+    }
+    result.calibration = calibrator.snapshot()
+    result.calibration["persisted"] = False
+    calibration_eligible = (
+        not universe.uses_current_universe_fallback
+        and result.coverage["avg_technical_pct"] >= 80
+        and missing_exit_count == 0
+    )
+    result.calibration["eligible_for_live"] = calibration_eligible
+    if persist_calibration and calibration_eligible:
+        result.calibration["persisted"] = save_calibration_snapshot(
+            result.calibration,
+            as_of=end_date,
+        )
+    elif persist_calibration and result.calibration.get("ready"):
+        result.warnings.append({
+            "code": "calibration_not_persisted",
+            "message": "Calibration was not saved for live sizing because universe or price coverage quality checks failed.",
+        })
+    if universe.uses_current_universe_fallback:
+        result.warnings.append({
+            "code": "survivorship_bias",
+            "message": "Historical universe snapshots are unavailable; results use today's stock universe and may contain survivorship bias.",
+        })
+    if use_fundamentals and result.coverage["avg_fundamental_pct"] < 50:
+        result.warnings.append({
+            "code": "low_fundamental_coverage",
+            "message": "Point-in-time fundamental coverage is below 50%; early periods may rely mainly on technical scores.",
+        })
+    if missing_exit_count:
+        result.warnings.append({
+            "code": "missing_exit_prices",
+            "message": f"{missing_exit_count} selected positions lacked a forward exit price; affected months were excluded.",
+        })
+    if weighting == "calibrated_kelly" and not result.calibration.get("ready"):
+        result.warnings.append({
+            "code": "calibration_warmup",
+            "message": "Calibration did not reach the minimum sample; equal weights were used during warm-up.",
+        })
 
-        if spy_ret is not None:
-            if spy_values:
-                spy_values.append(spy_values[-1] * (1 + spy_ret / 100))
-            else:
-                spy_values.append(10000 * (1 + spy_ret / 100))
-
-    _compute_aggregate_metrics(result, portfolio_values, spy_values)
+    _compute_aggregate_metrics(result, portfolio_values, spy_values, initial_capital)
     return result
+
+
+def _target_weights(
+    picks: List[Dict[str, Any]],
+    weighting: str,
+    calibrator: ExpandingScoreCalibrator,
+    target_allocation: float = 0.90,
+) -> Tuple[Dict[str, float], bool]:
+    if not picks:
+        return {}, False
+    if weighting == "calibrated_kelly":
+        probabilities = {
+            pick["ticker"]: calibrator.probability(pick.get("total_score", 0) or 0)
+            for pick in picks
+        }
+        if all(probability is not None for probability in probabilities.values()):
+            raw = {
+                ticker: kelly_fraction(probability, DEFAULT_UPISDE_PCT, DEFAULT_STOP_LOSS_PCT)
+                for ticker, probability in probabilities.items()
+                if probability is not None
+            }
+            if any(raw.values()):
+                return normalize_capped_weights(raw, target_allocation=target_allocation), True
+    return normalize_capped_weights(
+        {pick["ticker"]: 1.0 for pick in picks},
+        target_allocation=target_allocation,
+    ), False
+
+
+def _calculate_turnover(current: Dict[str, float], target: Dict[str, float]) -> float:
+    tickers = set(current) | set(target)
+    stock_turnover = sum(abs(target.get(ticker, 0.0) - current.get(ticker, 0.0)) for ticker in tickers)
+    current_cash = 1.0 - sum(current.values())
+    target_cash = 1.0 - sum(target.values())
+    return 0.5 * (stock_turnover + abs(target_cash - current_cash))
+
+
+def _drift_weights(
+    target: Dict[str, float],
+    forward_returns: Dict[str, float],
+    portfolio_return: float,
+) -> Dict[str, float]:
+    denominator = 1.0 + portfolio_return
+    if denominator <= 0:
+        return {}
+    return {
+        ticker: weight * (1.0 + forward_returns.get(ticker, 0.0)) / denominator
+        for ticker, weight in target.items()
+    }
 
 
 def _compute_aggregate_metrics(
     result: BacktestResult,
     portfolio_values: List[float],
     spy_values: List[float],
+    initial_capital: float = 10000.0,
 ) -> None:
     valid = [p for p in result.periods if p.get("avg_return") is not None]
     if not valid:
@@ -536,10 +745,10 @@ def _compute_aggregate_metrics(
     )
 
     if portfolio_values:
-        result.total_return_pct = round((portfolio_values[-1] / 10000 - 1) * 100, 2)
+        result.total_return_pct = round((portfolio_values[-1] / initial_capital - 1) * 100, 2)
 
     if spy_values:
-        result.spy_return_pct = round((spy_values[-1] / 10000 - 1) * 100, 2)
+        result.spy_return_pct = round((spy_values[-1] / initial_capital - 1) * 100, 2)
 
     if returns:
         result.best_month_pct = round(max(returns), 2)
@@ -554,7 +763,7 @@ def _compute_aggregate_metrics(
             result.sharpe_ratio = round(float(excess / np.std(returns_arr, ddof=1) * math.sqrt(12)), 2)
 
         if portfolio_values:
-            peak = portfolio_values[0]
+            peak = initial_capital
             max_dd = 0.0
             for v in portfolio_values:
                 if v > peak:
@@ -581,6 +790,12 @@ def format_backtest_summary(result: BacktestResult) -> Dict[str, Any]:
         "best_month": result.best_month_pct,
         "worst_month": result.worst_month_pct,
         "volatility": result.volatility_pct,
+        "total_transaction_cost": round(result.total_transaction_cost, 2),
+        "total_turnover": round(result.total_turnover, 4),
+        "equity_curve": result.equity_curve,
+        "coverage": result.coverage,
+        "warnings": result.warnings,
+        "calibration": result.calibration,
         "periods": result.periods,
         "tickers_picked": dict(sorted(result.tickers_picked.items(), key=lambda x: x[1], reverse=True)[:20]),
         "sector_counts": result.sector_counts,

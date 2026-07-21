@@ -17,6 +17,11 @@ SECTOR_EN_MAP: Dict[str, str] = {
     "Space": "Space",
     "Memory & Storage": "Memory & Storage",
     "Defense & Aerospace": "Defense & Aerospace",
+    "Consumer Staples": "Consumer Staples",
+    "Utilities": "Utilities",
+    "Real Estate": "Real Estate",
+    "Communication Services": "Communication Services",
+    "Other": "Other",
 }
 
 SECTOR_CN_MAP: Dict[str, str] = {
@@ -30,6 +35,10 @@ SECTOR_CN_MAP: Dict[str, str] = {
     "Space": "太空",
     "Memory & Storage": "内存存储",
     "Defense & Aerospace": "国防航天",
+    "Consumer Staples": "必需消费",
+    "Utilities": "公用事业",
+    "Real Estate": "房地产",
+    "Communication Services": "通信服务",
     "Other": "其他",
 }
 
@@ -44,11 +53,15 @@ SECTOR_TW_MAP: Dict[str, str] = {
     "Space": "太空",
     "Memory & Storage": "記憶體存儲",
     "Defense & Aerospace": "國防航太",
+    "Consumer Staples": "必需消費",
+    "Utilities": "公用事業",
+    "Real Estate": "房地產",
+    "Communication Services": "通訊服務",
     "Other": "其他",
 }
 
 STOCK_UNIVERSE: List[Dict[str, str]] = [
-    {"ticker": "NVDA", "name_cn": "英伟达", "name_tw": "輝達", "name_en": "NVIDIA", "sector": "Semiconductors"},
+    {"ticker": "NVDA", "name_cn": "英伟达", "name_tw": "輝達", "name_en": "NVIDIA", "sector": "Semiconductors", "universe_tier": "core"},
     {"ticker": "AMD", "name_cn": "超微半导体", "name_tw": "超微半導體", "name_en": "AMD", "sector": "Semiconductors"},
     {"ticker": "AVGO", "name_cn": "博通", "name_tw": "博通", "name_en": "Broadcom", "sector": "Semiconductors"},
     {"ticker": "MU", "name_cn": "美光科技", "name_tw": "美光科技", "name_en": "Micron Technology", "sector": "Semiconductors"},
@@ -57,11 +70,11 @@ STOCK_UNIVERSE: List[Dict[str, str]] = [
     {"ticker": "TXN", "name_cn": "德州仪器", "name_tw": "德州儀器", "name_en": "Texas Instruments", "sector": "Semiconductors"},
     {"ticker": "AAPL", "name_cn": "苹果", "name_tw": "蘋果", "name_en": "Apple", "sector": "Technology"},
     {"ticker": "MSFT", "name_cn": "微软", "name_tw": "微軟", "name_en": "Microsoft", "sector": "Technology"},
-    {"ticker": "META", "name_cn": "Meta", "name_tw": "Meta", "name_en": "Meta", "sector": "Technology"},
-    {"ticker": "GOOGL", "name_cn": "谷歌", "name_tw": "谷歌", "name_en": "Google", "sector": "Technology"},
+    {"ticker": "META", "name_cn": "Meta", "name_tw": "Meta", "name_en": "Meta", "sector": "Communication Services"},
+    {"ticker": "GOOGL", "name_cn": "谷歌", "name_tw": "谷歌", "name_en": "Google", "sector": "Communication Services"},
     {"ticker": "NOW", "name_cn": "ServiceNow", "name_tw": "ServiceNow", "name_en": "ServiceNow", "sector": "Technology"},
     {"ticker": "CRM", "name_cn": "赛富时", "name_tw": "賽富時", "name_en": "Salesforce", "sector": "Technology"},
-    {"ticker": "NFLX", "name_cn": "奈飞", "name_tw": "網飛", "name_en": "Netflix", "sector": "Technology"},
+    {"ticker": "NFLX", "name_cn": "奈飞", "name_tw": "網飛", "name_en": "Netflix", "sector": "Communication Services"},
     {"ticker": "LLY", "name_cn": "礼来", "name_tw": "禮來", "name_en": "Eli Lilly", "sector": "Healthcare"},
     {"ticker": "UNH", "name_cn": "联合健康", "name_tw": "聯合健康", "name_en": "UnitedHealth", "sector": "Healthcare"},
     {"ticker": "ISRG", "name_cn": "直觉外科", "name_tw": "直覺外科", "name_en": "Intuitive Surgical", "sector": "Healthcare"},
@@ -92,7 +105,41 @@ STOCK_UNIVERSE: List[Dict[str, str]] = [
     {"ticker": "STX", "name_cn": "希捷科技", "name_tw": "希捷科技", "name_en": "Seagate Technology", "sector": "Memory & Storage"},
     {"ticker": "RTX", "name_cn": "雷神技术", "name_tw": "雷神技術", "name_en": "RTX Corporation", "sector": "Defense & Aerospace"},
     {"ticker": "LMT", "name_cn": "洛克希德·马丁", "name_tw": "洛克希德·馬丁", "name_en": "Lockheed Martin", "sector": "Defense & Aerospace"},
+    {"ticker": "TSM", "name_cn": "台积电", "name_tw": "台積電", "name_en": "Taiwan Semiconductor", "sector": "Semiconductors"},
+    {"ticker": "ASML", "name_cn": "阿斯麦", "name_tw": "艾司摩爾", "name_en": "ASML", "sector": "Semiconductors"},
+    {"ticker": "AMAT", "name_cn": "应用材料", "name_tw": "應用材料", "name_en": "Applied Materials", "sector": "Semiconductors"},
+    {"ticker": "LRCX", "name_cn": "泛林集团", "name_tw": "科林研發", "name_en": "Lam Research", "sector": "Semiconductors"},
+    {"ticker": "ORCL", "name_cn": "甲骨文", "name_tw": "甲骨文", "name_en": "Oracle", "sector": "Technology"},
+    {"ticker": "ADBE", "name_cn": "奥多比", "name_tw": "Adobe", "name_en": "Adobe", "sector": "Technology"},
+    {"ticker": "ACN", "name_cn": "埃森哲", "name_tw": "埃森哲", "name_en": "Accenture", "sector": "Technology"},
+    {"ticker": "CSCO", "name_cn": "思科", "name_tw": "思科", "name_en": "Cisco", "sector": "Technology"},
+    {"ticker": "JNJ", "name_cn": "强生", "name_tw": "嬌生", "name_en": "Johnson & Johnson", "sector": "Healthcare"},
+    {"ticker": "MRK", "name_cn": "默沙东", "name_tw": "默沙東", "name_en": "Merck", "sector": "Healthcare"},
+    {"ticker": "ABBV", "name_cn": "艾伯维", "name_tw": "艾伯維", "name_en": "AbbVie", "sector": "Healthcare"},
+    {"ticker": "TMO", "name_cn": "赛默飞世尔", "name_tw": "賽默飛世爾", "name_en": "Thermo Fisher", "sector": "Healthcare"},
+    {"ticker": "BAC", "name_cn": "美国银行", "name_tw": "美國銀行", "name_en": "Bank of America", "sector": "Financial"},
+    {"ticker": "GS", "name_cn": "高盛", "name_tw": "高盛", "name_en": "Goldman Sachs", "sector": "Financial"},
+    {"ticker": "MS", "name_cn": "摩根士丹利", "name_tw": "摩根士丹利", "name_en": "Morgan Stanley", "sector": "Financial"},
+    {"ticker": "BRK-B", "name_cn": "伯克希尔", "name_tw": "波克夏", "name_en": "Berkshire Hathaway", "sector": "Financial"},
+    {"ticker": "CVX", "name_cn": "雪佛龙", "name_tw": "雪佛龍", "name_en": "Chevron", "sector": "Energy"},
+    {"ticker": "SLB", "name_cn": "斯伦贝谢", "name_tw": "斯倫貝謝", "name_en": "SLB", "sector": "Energy"},
+    {"ticker": "DE", "name_cn": "迪尔", "name_tw": "迪爾", "name_en": "Deere", "sector": "Industrials"},
+    {"ticker": "UNP", "name_cn": "联合太平洋", "name_tw": "聯合太平洋", "name_en": "Union Pacific", "sector": "Industrials"},
+    {"ticker": "UPS", "name_cn": "联合包裹", "name_tw": "優比速", "name_en": "UPS", "sector": "Industrials"},
+    {"ticker": "PG", "name_cn": "宝洁", "name_tw": "寶僑", "name_en": "Procter & Gamble", "sector": "Consumer Staples"},
+    {"ticker": "KO", "name_cn": "可口可乐", "name_tw": "可口可樂", "name_en": "Coca-Cola", "sector": "Consumer Staples"},
+    {"ticker": "PEP", "name_cn": "百事", "name_tw": "百事", "name_en": "PepsiCo", "sector": "Consumer Staples"},
+    {"ticker": "CL", "name_cn": "高露洁", "name_tw": "高露潔", "name_en": "Colgate-Palmolive", "sector": "Consumer Staples"},
+    {"ticker": "NEE", "name_cn": "新纪元能源", "name_tw": "新紀元能源", "name_en": "NextEra Energy", "sector": "Utilities"},
+    {"ticker": "DUK", "name_cn": "杜克能源", "name_tw": "杜克能源", "name_en": "Duke Energy", "sector": "Utilities"},
+    {"ticker": "SO", "name_cn": "南方电力", "name_tw": "南方電力", "name_en": "Southern Company", "sector": "Utilities"},
+    {"ticker": "PLD", "name_cn": "安博", "name_tw": "普洛斯", "name_en": "Prologis", "sector": "Real Estate"},
+    {"ticker": "AMT", "name_cn": "美国电塔", "name_tw": "美國電塔", "name_en": "American Tower", "sector": "Real Estate"},
 ]
+
+SATELLITE_TICKERS = {"RIVN", "LI", "RKLB", "ASTS", "LUNR"}
+for _stock in STOCK_UNIVERSE:
+    _stock["universe_tier"] = "satellite" if _stock["ticker"] in SATELLITE_TICKERS else "core"
 
 SCORING_WEIGHTS: Dict[str, float] = {
     "revenue_growth": 0.25,

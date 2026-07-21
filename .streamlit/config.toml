@@ -3,3 +3,15 @@ headless = true
 
 [browser]
 gatherUsageStats = false
+
+[theme]
+base = "dark"
+primaryColor = "#22d3c5"
+backgroundColor = "#070b12"
+secondaryBackgroundColor = "#0d1420"
+textColor = "#e8f0f8"
+borderColor = "#1d2a3c"
+showWidgetBorder = true
+baseRadius = "small"
+font = "sans-serif"
+codeFont = "monospace"

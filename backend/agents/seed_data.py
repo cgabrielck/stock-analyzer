@@ -1,4 +1,4 @@
-# Auto-generated seed data (44 stocks)
+# Auto-generated seed data for the original core universe; new symbols require live data.
 # Used as fallback when yfinance is blocked on cloud
 SEED_DATA: dict = {
     "AAPL": {
@@ -1717,4 +1717,3 @@ SEED_DATA: dict = {
         "insider_net_shares": 0,
     },
 }
-

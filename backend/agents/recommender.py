@@ -6,7 +6,10 @@ from agents.sec_analyzer import get_latest_filing
 from agents.auto_upgrader import agent_state
 from agents.technical_analyzer import compute_all_technical
 from agents.llm_agent import analyze_stocks_batch, is_available as llm_available
+from agents.risk_analyzer import fetch_risk_metrics
+from agents.market_regime import detect_global_market_regime
 from utils.constants import SECTOR_CN_MAP, STOCK_UNIVERSE
+from utils.selection import select_recommendations
 from i18n import t
 
 ENTRY_THRESHOLD: float = 60.0
@@ -30,6 +33,7 @@ def run_full_analysis(
 
     cn_map = {s["ticker"]: s["name_cn"] for s in STOCK_UNIVERSE}
     sector_map = {s["ticker"]: s["sector"] for s in STOCK_UNIVERSE}
+    tier_map = {s["ticker"]: s.get("universe_tier", "core") for s in STOCK_UNIVERSE}
 
     all_data = fetch_all_stocks(selected_tickers, progress_callback, force_refresh)
 
@@ -55,6 +59,7 @@ def run_full_analysis(
         custom_sec = sector_map.get(ticker)
         if custom_sec:
             s["sector"] = custom_sec
+        s["universe_tier"] = tier_map.get(ticker, "satellite")
         s["sector_cn"] = SECTOR_CN_MAP.get(s.get("sector"), s.get("sector", "未知"))
 
     tickers = [stock["ticker"] for stock in scored]
@@ -77,30 +82,20 @@ def run_full_analysis(
         rest = [s for s in scored if s["ticker"] not in llm_tickers]
         scored = scored_with_llm + rest
 
-    eligible = [s for s in scored if s.get("metrics_used", 0) >= MIN_RECOMMENDATION_METRICS]
-    pool = [s for s in eligible if (s.get("total_score") or 0) >= ENTRY_THRESHOLD]
-    skipped = [s for s in eligible if (s.get("total_score") or 0) < ENTRY_THRESHOLD]
-
-    sector_count: Dict[str, int] = {}
-    deduped: List[Dict[str, Any]] = []
-    for s in pool:
-        sec = s.get("sector") or "Unknown"
-        if sector_count.get(sec, 0) < MAX_PER_SECTOR:
-            deduped.append(s)
-            sector_count[sec] = sector_count.get(sec, 0) + 1
-
-    deduped.sort(key=lambda x: x.get("total_score", 0) or 0, reverse=True)
-    picks = deduped[:TOP_N]
-
-    if len(picks) < TOP_N:
-        fill_pool = [
-            s for s in skipped
-            if (s.get("total_score") or 0) >= FILL_THRESHOLD
-            and s not in picks
-        ]
-        fill_pool.sort(key=lambda x: x.get("total_score", 0) or 0, reverse=True)
-        need = TOP_N - len(picks)
-        picks.extend(fill_pool[:need])
+    # Technical and LLM analysis change total_score, so restore global rank order
+    # before applying thresholds and diversification constraints.
+    scored.sort(key=lambda stock: stock.get("total_score", 0) or 0, reverse=True)
+    market_regime = detect_global_market_regime(force_refresh=force_refresh)
+    picks = select_recommendations(
+        scored,
+        entry_threshold=market_regime.get("entry_threshold", ENTRY_THRESHOLD),
+        fill_threshold=market_regime.get("fill_threshold", FILL_THRESHOLD),
+        max_per_sector=MAX_PER_SECTOR,
+        top_n=TOP_N,
+        min_metrics=MIN_RECOMMENDATION_METRICS,
+        max_satellite=1,
+        satellite_threshold=65.0,
+    )
 
     recommendations: List[Dict[str, Any]] = []
     for rec in picks:
@@ -116,6 +111,11 @@ def run_full_analysis(
             rec["reasoning"] = _generate_reasoning(rec, news, lang)
 
         recommendations.append(rec)
+
+    if recommendations:
+        risk_by_ticker = fetch_risk_metrics([rec["ticker"] for rec in recommendations])
+        for rec in recommendations:
+            rec["risk_metrics"] = risk_by_ticker.get(rec["ticker"], {"available": False, "risk_level": "unknown"})
 
     if recommendations:
         agent_state.log_recommendation(recommendations)
@@ -152,6 +152,7 @@ def run_full_analysis(
         "cache_status": {},
         "agent_summary": agent_state.get_summary(),
         "use_llm": use_llm,
+        "market_regime": market_regime,
         "_debug_all_data": all_data,
     }
 

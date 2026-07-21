@@ -2,6 +2,7 @@ import json
 import shutil
 import os
 import io
+import html
 from typing import Any, Dict, List, Optional
 
 import streamlit as st
@@ -68,310 +69,99 @@ def _sector_name(sec: str, lang: str) -> str:
 
 def _inject_apple_css() -> None:
     css = """<style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-    @import url('https://fonts.googleapis.com/css2?family=SF+Pro+Display:wght@400;500;600;700&display=swap');
+    :root {
+        --bg: #070b12; --panel: #0d1420; --panel-2: #111b2a; --line: #1d2a3c;
+        --line-hot: #2a405b; --text: #e8f0f8; --muted: #7e91a8; --faint: #4c6077;
+        --cyan: #22d3c5; --cyan-soft: rgba(34,211,197,.11); --green: #34d399;
+        --red: #fb7185; --amber: #fbbf24; --blue: #60a5fa;
+        --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+    html, body, [class*="css"] { font-family: var(--sans); }
+    .stApp { background: radial-gradient(circle at 75% -10%, #102239 0, transparent 35%), var(--bg); color: var(--text); }
+    .stApp::before { content:""; position:fixed; inset:0; pointer-events:none; opacity:.22; background-image:linear-gradient(rgba(96,165,250,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(96,165,250,.025) 1px,transparent 1px); background-size:32px 32px; }
+    .stApp .main { max-width: 1440px; margin: 0 auto; }
+    .main > div { padding: 1.4rem 2rem 3rem; }
+    header[data-testid="stHeader"] { background: transparent; }
+    #MainMenu, footer { visibility: hidden; }
 
-    * { font-family: -apple-system, 'Inter', 'SF Pro Display', 'Helvetica Neue', sans-serif; }
+    section[data-testid="stSidebar"] { background: #09101a; border-right: 1px solid var(--line); min-width: 282px; }
+    section[data-testid="stSidebar"] > div { padding: 1rem .85rem; }
+    section[data-testid="stSidebar"] .stMarkdown p { font-size:.78rem; color:var(--muted); }
+    .sidebar-section { color:var(--cyan); font-family:var(--mono); font-size:.65rem; font-weight:700; letter-spacing:.14em; text-transform:uppercase; margin:1rem 0 .35rem; padding-bottom:.35rem; border-bottom:1px solid var(--line); }
 
-    .stApp {
-        background: #f5f5f7;
-    }
+    .terminal-header { display:flex; justify-content:space-between; gap:1.5rem; align-items:flex-end; padding:1.1rem 0 1.25rem; border-bottom:1px solid var(--line); margin-bottom:1rem; }
+    .brand-kicker { color:var(--cyan); font-family:var(--mono); font-size:.66rem; font-weight:700; letter-spacing:.18em; text-transform:uppercase; margin-bottom:.3rem; }
+    .app-title { font-size:2rem; line-height:1; font-weight:760; letter-spacing:-.045em; color:var(--text); margin:0; }
+    .app-title span { color:var(--cyan); }
+    .app-subtitle { color:var(--muted); font-size:.78rem; letter-spacing:.02em; margin:.5rem 0 0; }
+    .terminal-live { display:flex; align-items:center; gap:.55rem; color:var(--muted); font-family:var(--mono); font-size:.67rem; text-transform:uppercase; letter-spacing:.1em; }
+    .live-dot { width:7px; height:7px; border-radius:50%; background:var(--green); box-shadow:0 0 12px var(--green); animation:pulse 2s infinite; }
+    @keyframes pulse { 50% { opacity:.45; } }
 
-    /* ---- Sidebar ---- */
-    section[data-testid="stSidebar"] {
-        background: #ffffff;
-        border-right: 1px solid #d2d2d7;
-        min-width: 260px;
-    }
-    section[data-testid="stSidebar"] > div {
-        padding: 1rem 0.8rem;
-    }
-    section[data-testid="stSidebar"] .stMarkdown p {
-        font-size: 0.82rem;
-        font-weight: 500;
-    }
+    h1,h2,h3 { color:var(--text) !important; letter-spacing:-.02em; }
+    h2 { font-size:1.25rem !important; }
+    h3 { font-size:1rem !important; }
+    p, label, .stMarkdown { color:var(--text); }
+    [data-testid="stCaptionContainer"], .stCaption { color:var(--muted) !important; font-size:.7rem; }
+    hr { border:0; height:1px; background:var(--line); margin:1.1rem 0; }
 
-    .sidebar-section {
-        font-size: 0.7rem;
-        font-weight: 700;
-        letter-spacing: 0.04em;
-        text-transform: uppercase;
-        color: #86868b;
-        margin: 0.8rem 0 0.3rem 0;
-    }
-    .sidebar-section:first-of-type {
-        margin-top: 0;
-    }
+    .stTabs [data-baseweb="tab-list"] { gap:.35rem; overflow-x:auto; scrollbar-width:none; border-bottom:1px solid var(--line); padding-bottom:.5rem; margin-bottom:1.2rem; }
+    .stTabs [data-baseweb="tab"] { flex:0 0 auto; border:1px solid transparent; border-radius:6px; color:var(--muted); font-family:var(--mono); font-size:.69rem; font-weight:700; letter-spacing:.04em; padding:.42rem .8rem; }
+    .stTabs [aria-selected="true"] { color:var(--cyan) !important; background:var(--cyan-soft); border-color:rgba(34,211,197,.28); }
 
-    .stApp .main {
-        max-width: 1200px;
-        margin: 0 auto;
-        padding: 0.5rem;
-    }
-    .main > div {
-        padding: 1.2rem 1.5rem;
-        background: transparent;
-        border-radius: 0;
-        margin: 0;
-    }
+    .rec-card, .feature-card { background:linear-gradient(145deg,var(--panel-2),var(--panel)); border:1px solid var(--line); border-radius:10px; position:relative; overflow:hidden; }
+    .rec-card::before { content:""; position:absolute; inset:0 auto 0 0; width:2px; background:var(--cyan); }
+    .rec-card { padding:.95rem .8rem; text-align:left; min-height:180px; transition:border-color .18s,transform .18s; }
+    .rec-card:hover { transform:translateY(-2px); border-color:var(--line-hot); }
+    .rec-card .rc-rank { color:var(--cyan); font-family:var(--mono); font-size:.62rem; font-weight:700; letter-spacing:.13em; margin:0; }
+    .rec-card .rc-ticker { color:var(--text); font-family:var(--mono); font-size:1.55rem; font-weight:800; margin:.35rem 0 0; }
+    .rec-card .rc-name { color:var(--muted); font-size:.73rem; font-weight:600; margin:.1rem 0; min-height:1.8em; }
+    .rec-card .rc-sector { color:var(--faint); font-family:var(--mono); font-size:.6rem; text-transform:uppercase; margin:0 0 .6rem; }
+    .rec-card .rc-divider { border:0; height:1px; background:var(--line); margin:.55rem 0; }
+    .rec-card .rc-price { color:var(--text); font-family:var(--mono); font-size:1.25rem; font-weight:700; margin:0; white-space:nowrap; }
+    .rec-card .rc-score { color:var(--green); font-family:var(--mono); font-size:.7rem; font-weight:700; margin:.2rem 0 0; }
+    .feature-card { padding:1rem; height:100%; }
+    .feature-card h3 { color:var(--text); margin:0 0 .3rem; }
+    .feature-card p { color:var(--muted); font-size:.76rem; margin:0; }
 
-    .app-title {
-        font-size: 2rem;
-        font-weight: 800;
-        color: #1d1d1f;
-        margin: 0;
-    }
-    .app-subtitle {
-        color: #86868b;
-        font-size: 0.9rem;
-        font-weight: 500;
-        margin: 0.2rem 0 0 0;
-    }
+    div[data-testid="stMetric"] { background:linear-gradient(145deg,var(--panel-2),var(--panel)); border:1px solid var(--line); border-radius:8px; padding:.72rem .85rem; min-height:82px; }
+    div[data-testid="stMetric"] label { color:var(--muted) !important; font-family:var(--mono); font-size:.62rem !important; letter-spacing:.07em; text-transform:uppercase; }
+    div[data-testid="stMetric"] [data-testid="stMetricValue"] { color:var(--text); font-family:var(--mono); font-size:1.12rem; font-weight:700; }
+    div[data-testid="stMetricDelta"] { font-family:var(--mono); font-size:.66rem; }
 
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 0;
-        border-bottom: 1px solid #d2d2d7;
-        margin-bottom: 1rem;
-    }
-    .stTabs [data-baseweb="tab"] {
-        font-size: 0.82rem;
-        font-weight: 600;
-        color: #86868b;
-        padding: 0.5rem 1rem;
-    }
-    .stTabs [aria-selected="true"] {
-        color: #0071e3 !important;
-    }
+    .stExpander { background:var(--panel); border:1px solid var(--line) !important; border-radius:8px !important; margin-bottom:.55rem; overflow:hidden; }
+    .stExpander summary { color:var(--text); font-size:.8rem; font-weight:650; padding:.7rem .9rem; }
+    .stContainer { background:var(--panel); border:1px solid var(--line) !important; border-radius:8px !important; padding:.75rem !important; }
+    .stDataFrame { border:1px solid var(--line); border-radius:8px; overflow:hidden; font-family:var(--mono); font-size:.73rem; }
 
-    div[data-testid="column"] {
-        display: flex;
-        flex-direction: column;
-    }
-    div[data-testid="column"] > div {
-        flex: 1;
-        display: flex;
-        flex-direction: column;
-    }
-    .rec-card {
-        flex: 1;
-    }
+    .stButton > button { min-height:36px; border-radius:6px !important; border:1px solid var(--line-hot); background:var(--panel-2); color:var(--text); font-size:.74rem; font-weight:700; transition:all .15s; }
+    .stButton > button:hover { border-color:var(--cyan); color:var(--cyan); background:var(--cyan-soft); }
+    .stButton > button[kind="primary"] { color:#031210; background:linear-gradient(135deg,#2de3d3,#16a99d); border-color:#45f0df; box-shadow:0 0 18px rgba(34,211,197,.14); }
+    .stButton > button[kind="primary"]:hover { color:#031210; filter:brightness(1.08); }
+    .stDownloadButton > button { background:var(--panel-2); border:1px solid var(--line-hot); color:var(--text); border-radius:6px; }
 
-    .rec-card {
-        background: #ffffff;
-        border-radius: 14px;
-        padding: 0.8rem 0.6rem;
-        text-align: center;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.04), 0 0 0 1px rgba(0,0,0,0.02);
-        transition: transform 0.2s, box-shadow 0.2s;
-    }
-    .rec-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(0,0,0,0.06), 0 0 0 1px rgba(0,0,0,0.02);
-    }
-    .rec-card .rc-rank {
-        font-size: 0.65rem;
-        font-weight: 700;
-        color: #86868b;
-        letter-spacing: 0.06em;
-        margin: 0;
-    }
-    .rec-card .rc-ticker {
-        font-size: 1.5rem;
-        font-weight: 800;
-        color: #1d1d1f;
-        margin: 2px 0 0;
-    }
-    .rec-card .rc-name {
-        font-size: 0.75rem;
-        font-weight: 600;
-        color: #86868b;
-        margin: 1px 0;
-        line-height: 1.2;
-    }
-    .rec-card .rc-sector {
-        font-size: 0.65rem;
-        color: #a1a1a6;
-        margin: 0 0 6px;
-    }
-    .rec-card .rc-divider {
-        border: none;
-        height: 1px;
-        background: #e8e8ed;
-        margin: 6px 10px;
-    }
-    .rec-card .rc-price {
-        font-size: 1.3rem;
-        font-weight: 700;
-        color: #1d1d1f;
-        margin: 0;
-        white-space: nowrap;
-    }
-    .rec-card .rc-score {
-        font-size: 0.75rem;
-        font-weight: 600;
-        color: #86868b;
-        margin: 1px 0 0;
-    }
+    input, textarea, [data-baseweb="select"] > div { background:var(--panel) !important; color:var(--text) !important; border-color:var(--line-hot) !important; border-radius:6px !important; }
+    [data-baseweb="popover"] { color:var(--text); }
+    .stCheckbox label,.stSelectbox label,.stNumberInput label,.stSlider label { color:var(--muted) !important; font-size:.72rem; font-weight:600; }
+    .stSlider [data-baseweb="slider"] > div { background:var(--line-hot) !important; }
+    .stSlider [data-baseweb="slider"] > div > div,.stProgress > div > div > div { background:var(--cyan) !important; }
+    .stSlider [role="slider"] { background:var(--cyan) !important; border:2px solid var(--panel) !important; }
+    .stAlert { background:var(--panel-2); border:1px solid var(--line-hot); border-radius:7px; color:var(--text); font-size:.78rem; }
+    .stock-tag { display:inline-flex; align-items:center; background:var(--panel-2); border:1px solid var(--line-hot); border-radius:4px; padding:3px 8px; color:var(--text); font-family:var(--mono); font-size:.68rem; font-weight:700; margin:2px; }
 
-    .feature-card {
-        background: #ffffff;
-        border-radius: 12px;
-        padding: 1rem 0.8rem;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.04), 0 0 0 1px rgba(0,0,0,0.02);
-        height: 100%;
-    }
-    .feature-card h3 {
-        font-size: 0.95rem;
-        font-weight: 700;
-        margin: 0 0 0.2rem;
-    }
-    .feature-card p {
-        font-size: 0.78rem;
-        font-weight: 500;
-        color: #86868b;
-        margin: 0;
-    }
-
-    div[data-testid="stMetric"] {
-        background: #ffffff;
-        border: 1px solid #e8e8ed;
-        border-radius: 10px;
-        padding: 0.4rem 0.7rem;
-    }
-    div[data-testid="stMetric"] > div {
-        font-size: 0.65rem;
-        font-weight: 600;
-        color: #86868b;
-    }
-    div[data-testid="stMetric"] [data-testid="stMetricValue"] {
-        font-size: 1rem;
-        font-weight: 800;
-        color: #1d1d1f;
-    }
-
-    .stExpander {
-        border: 1px solid #e8e8ed !important;
-        border-radius: 12px !important;
-        margin-bottom: 0.5rem;
-        background: #ffffff;
-    }
-    .stExpander summary {
-        font-weight: 700;
-        font-size: 0.85rem;
-        padding: 0.6rem 1rem;
-    }
-
-    .stButton > button {
-        font-size: 0.8rem;
-        font-weight: 600;
-        border-radius: 10px !important;
-        padding: 0.3rem 0.8rem;
-        border: none;
-    }
-    .stButton > button[kind="primary"] {
-        background: #0071e3;
-        color: #ffffff;
-    }
-    .stButton > button[kind="secondary"] {
-        background: #e8e8ed;
-        color: #1d1d1f;
-    }
-
-    .stDataFrame {
-        border: 1px solid #e8e8ed;
-        border-radius: 10px;
-        overflow-x: auto;
-        font-size: 0.8rem;
-    }
-    .stDataFrame thead tr th {
-        font-size: 0.7rem;
-        font-weight: 700;
-        color: #86868b;
-        text-transform: uppercase;
-        padding: 0.4rem 0.6rem;
-        background: #f5f5f7;
-        border-bottom: 1px solid #e8e8ed;
-    }
-    .stDataFrame tbody td {
-        padding: 0.35rem 0.6rem;
-        border-bottom: 1px solid #f0f0f2;
-    }
-
-    hr {
-        border: none;
-        height: 1px;
-        background: #e8e8ed;
-        margin: 1rem 0;
-    }
-
-    .stProgress > div > div > div {
-        background: #0071e3 !important;
-    }
-
-    .stCheckbox label { font-size: 0.78rem; font-weight: 500; }
-    .stSlider label { font-size: 0.72rem; font-weight: 600; color: #1d1d1f; }
-    .stSlider [data-baseweb="slider"] > div { background: #d2d2d7 !important; height: 4px !important; }
-    .stSlider [data-baseweb="slider"] > div > div { background: #1d1d1f !important; height: 4px !important; }
-    .stSlider [data-baseweb="slider"] [role="slider"] { background: #1d1d1f !important; border: 2px solid #fff !important; width: 16px !important; height: 16px !important; }
-    .stSlider input[type="number"] { background: #f5f5f7 !important; border: 1px solid #d2d2d7 !important; border-radius: 6px !important; color: #1d1d1f !important; font-size: 0.72rem !important; font-weight: 600 !important; padding: 1px 4px !important; width: 44px !important; max-height: 24px !important; text-align: center !important; }
-
-    .stNumberInput label { font-size: 0.72rem; font-weight: 600; color: #1d1d1f; }
-    .stNumberInput > div > div { border-radius: 8px !important; border: 1px solid #d2d2d7 !important; }
-    .stNumberInput input { background: #f5f5f7 !important; color: #1d1d1f !important; font-size: 0.8rem !important; }
-
-    .stSelectbox label { font-size: 0.78rem; font-weight: 500; }
-    .stSelectbox > div > div { border-radius: 10px; border-color: #e8e8ed; }
-
-    .stAlert { border-radius: 10px; background: #f5f5f7; font-size: 0.85rem; padding: 0.6rem 0.8rem; }
-    .stContainer { border: 1px solid #e8e8ed !important; border-radius: 10px !important; background: #ffffff; padding: 0.6rem 0.8rem !important; margin-bottom: 0.4rem; }
-    .stCaption { font-size: 0.7rem; color: #a1a1a6; }
-    .stock-tag { display: inline-flex; align-items: center; gap: 4px; background: #f5f5f7; border: 1px solid #e8e8ed; border-radius: 16px; padding: 2px 10px; font-size: 0.75rem; font-weight: 600; margin: 2px 3px 2px 0; color: #1d1d1f; }
-
+    @media (max-width: 1024px) { .main > div { padding:1rem; } .app-title{font-size:1.65rem;} }
     @media (max-width: 768px) {
-        .main > div { padding: 0.8rem; }
-        .app-title { font-size: 1.4rem; }
-        div[data-testid="column"] { min-width: 100% !important; flex: 0 0 100% !important; }
-        .rec-card { padding: 0.6rem 0.4rem; }
-        .rec-card .rc-ticker { font-size: 1.2rem; }
-        .rec-card .rc-price { font-size: 1.1rem; }
-        .stTabs [data-baseweb="tab"] { font-size: 0.7rem; padding: 0.4rem 0.5rem; }
-        .stButton > button { min-height: 44px; font-size: 0.85rem; }
-        .stCheckbox label { font-size: 0.85rem; }
-        section[data-testid="stSidebar"] { min-width: 0; }
-        section[data-testid="stSidebar"] > div { padding: 0.8rem 0.6rem; }
+        .main > div { padding:.7rem .65rem 2rem; }
+        .terminal-header { align-items:flex-start; flex-direction:column; gap:.65rem; }
+        .app-title { font-size:1.45rem; }
+        .app-subtitle { font-size:.7rem; }
+        .rec-card { min-height:0; padding:.8rem; }
+        .stTabs [data-baseweb="tab"] { font-size:.64rem; padding:.4rem .55rem; }
+        .stButton > button { min-height:44px; }
+        section[data-testid="stSidebar"] { min-width:0; }
     }
-
-    @media (prefers-color-scheme: dark) {
-        .stApp { background: #1c1c1e; }
-        section[data-testid="stSidebar"] { background: #2c2c2e; border-right-color: #38383a; }
-        .app-title { color: #f5f5f7; }
-        .rec-card { background: #2c2c2e; box-shadow: 0 1px 4px rgba(0,0,0,0.2), 0 0 0 1px rgba(255,255,255,0.04); }
-        .rec-card .rc-ticker { color: #f5f5f7; }
-        .rec-card .rc-price { color: #f5f5f7; }
-        .rec-card .rc-name { color: #a1a1a6; }
-        .rec-card .rc-divider { background: #38383a; }
-        .feature-card { background: #2c2c2e; }
-        .feature-card p { color: #a1a1a6; }
-        div[data-testid="stMetric"] { background: #2c2c2e; border-color: #38383a; }
-        div[data-testid="stMetric"] [data-testid="stMetricValue"] { color: #f5f5f7; }
-        .stExpander { background: #2c2c2e; border-color: #38383a !important; }
-        .stDataFrame { border-color: #38383a; }
-        .stDataFrame thead tr th { background: #333336; color: #a1a1a6; border-bottom-color: #38383a; }
-        .stDataFrame tbody td { border-bottom-color: #333336; }
-        .stContainer { background: #2c2c2e; border-color: #38383a !important; }
-        .stock-tag { background: #3a3a3c; border-color: #48484a; color: #f5f5f7; }
-        .stTabs [data-baseweb="tab-list"] { border-bottom-color: #38383a; }
-        .stButton > button[kind="secondary"] { background: #3a3a3c; color: #f5f5f7; }
-        .stSlider label { color: #f5f5f7; }
-        .stSlider [data-baseweb="slider"] > div { background: #48484a !important; }
-        .stSlider [data-baseweb="slider"] > div > div { background: #f5f5f7 !important; }
-        .stSlider [data-baseweb="slider"] [role="slider"] { background: #f5f5f7 !important; border-color: #2c2c2e !important; }
-        .stSlider input[type="number"] { background: #3a3a3c !important; border-color: #48484a !important; color: #f5f5f7 !important; }
-        section[data-testid="stSidebar"] { background: #2c2c2e; }
-        .stSelectbox > div > div { border-color: #48484a; }
-    }
-</style>
-"""
+</style>"""
     st.markdown(css, unsafe_allow_html=True)
 
 
@@ -387,6 +177,7 @@ def init_state() -> None:
         st.session_state.custom_tickers: List[str] = _load_custom_tickers()
         st.session_state.lang: str = "zh_tw"
         st.session_state.portfolio: Dict[str, Any] = {}
+        st.session_state.market_regime: Dict[str, Any] = {}
 
 
 def build_sidebar() -> Dict[str, Any]:
@@ -466,9 +257,9 @@ def build_sidebar() -> Dict[str, Any]:
     with add_col1:
         st.caption(t("pool.bulk_add", selected_lang))
     with add_col2:
-        add_clicked = st.button(t("sidebar.custom_add", selected_lang), use_container_width=True, key="add_custom_btn")
+        add_clicked = st.button(t("sidebar.custom_add", selected_lang), width="stretch", key="add_custom_btn")
     with add_col3:
-        clear_custom = st.button("🗑", use_container_width=True, key="clear_custom_btn")
+        clear_custom = st.button("🗑", width="stretch", key="clear_custom_btn")
 
     if add_clicked and bulk_tickers.strip():
         extra = [t_.strip().upper() for t_ in bulk_tickers.replace("\n", ",").split(",") if t_.strip()]
@@ -497,7 +288,7 @@ def build_sidebar() -> Dict[str, Any]:
             with col_a:
                 st.markdown(f"<span style='font-size:0.75rem;'>{t_}</span>", unsafe_allow_html=True)
             with col_b:
-                if st.button("✕", key=f"remove_{t_}", help=t("sidebar.custom_remove", selected_lang), use_container_width=True):
+                if st.button("✕", key=f"remove_{t_}", help=t("sidebar.custom_remove", selected_lang), width="stretch"):
                     st.session_state.custom_tickers.remove(t_)
                     _save_custom_tickers(st.session_state.custom_tickers)
                     st.rerun()
@@ -559,11 +350,11 @@ def build_sidebar() -> Dict[str, Any]:
     st.sidebar.markdown("<hr style='margin:1.2rem 0;'>", unsafe_allow_html=True)
     col1, col2, col3 = st.sidebar.columns([1, 1, 1])
     with col1:
-        params["run_clicked"] = st.button(t("sidebar.start", selected_lang), type="primary", use_container_width=True)
+        params["run_clicked"] = st.button(t("sidebar.start", selected_lang), type="primary", width="stretch")
     with col2:
         params["force_refresh"] = st.checkbox(t("sidebar.refresh", selected_lang), value=True, key="force_refresh_cb")
     with col3:
-        if st.button(t("sidebar.clear_cache", selected_lang), type="secondary", use_container_width=True):
+        if st.button(t("sidebar.clear_cache", selected_lang), type="secondary", width="stretch"):
             from utils.cache import cache
             cache.clear()
             for key in ["recommendations", "all_rankings", "source_health", "scored_data"]:
@@ -640,6 +431,7 @@ def run_analysis(params: Dict[str, Any]) -> None:
     st.session_state.upgrade_logs = results.get("upgrade_logs", [])
     st.session_state.agent_summary = results.get("agent_summary", {})
     st.session_state.use_llm = results.get("use_llm", False)
+    st.session_state.market_regime = results.get("market_regime", {})
     st.session_state.analysis_done = True
     st.session_state.analysis_running = False
 
@@ -647,12 +439,23 @@ def run_analysis(params: Dict[str, Any]) -> None:
     st.session_state.portfolio = build_portfolio(
         st.session_state.recommendations,
         total_capital=params.get("portfolio_capital", 100000),
+        target_allocation=st.session_state.market_regime.get("target_allocation", 0.90),
     )
 
     if results.get("error"):
         st.error(t("app.error", lang, msg=results["error"]))
     else:
         st.success(t("app.complete", lang, n=len(st.session_state.all_rankings)))
+        regime = st.session_state.market_regime
+        if regime:
+            st.info(t(
+                "regime.banner",
+                lang,
+                regime=t(f"regime.{regime.get('regime', 'neutral')}", lang),
+                exposure=regime.get("target_allocation", 0.7) * 100,
+                entry=regime.get("entry_threshold", 65),
+                vix=regime.get("vix") if regime.get("vix") is not None else "N/A",
+            ))
 
     debug_all = results.get("_debug_all_data", {})
     with st.expander("🐛 Debug", expanded=False):
@@ -1027,6 +830,15 @@ def render_recommendations_tab() -> None:
                 st.warning("Offline seed data: do not treat this recommendation as live analysis.")
             else:
                 st.caption(f"Data source: {source}")
+            risk = rec.get("risk_metrics", {})
+            if risk.get("available"):
+                level = risk.get("risk_level", "unknown").upper()
+                st.caption(
+                    f"Risk: {level} | Vol {risk.get('annual_volatility_pct', 'N/A')}% | "
+                    f"VaR 95% {risk.get('var_95_daily_pct', 'N/A')}% | Beta {risk.get('beta', 'N/A')}"
+                )
+            else:
+                st.caption("Risk: unavailable (insufficient price history)")
             avail = dq.get("metrics_available", 0)
             total_m = dq.get("metrics_total", 6)
             ratio = avail / total_m if total_m > 0 else 0
@@ -1081,7 +893,7 @@ def render_recommendations_tab() -> None:
             price = rec.get("price")
             pcol1, pcol2 = st.columns(2)
             with pcol1:
-                if st.button(t("price_suggest.btn", lang), key=f"price_btn_{ticker}", use_container_width=True):
+                if st.button(t("price_suggest.btn", lang), key=f"price_btn_{ticker}", width="stretch"):
                     with st.spinner(t("price_suggest.loading", lang)):
                         from agents.technical_analyzer import compute_technical_indicators
                         tech_data = compute_technical_indicators(ticker)
@@ -1097,7 +909,7 @@ def render_recommendations_tab() -> None:
                             result = suggest_price_fallback(ticker, tech_data, price or 0)
                         st.session_state[f"price_result_{ticker}"] = result
             with pcol2:
-                if st.button(t("options.btn", lang), key=f"opt_btn_{ticker}", use_container_width=True):
+                if st.button(t("options.btn", lang), key=f"opt_btn_{ticker}", width="stretch"):
                     with st.spinner(t("options.loading", lang)):
                         from agents.technical_analyzer import compute_technical_indicators
                         tech_data = compute_technical_indicators(ticker)
@@ -1170,7 +982,7 @@ def render_recommendations_tab() -> None:
 
             # --- Trading Strategy ---
             strategy_key = f"strat_result_{ticker}"
-            if st.button(t("strategy.btn", lang), key=f"strat_btn_{ticker}", use_container_width=True):
+            if st.button(t("strategy.btn", lang), key=f"strat_btn_{ticker}", width="stretch"):
                 with st.spinner(t("strategy.loading", lang)):
                     from agents.trading_strategies import recommend_strategies
                     from agents.technical_analyzer import compute_technical_indicators
@@ -1329,7 +1141,7 @@ def render_recommendations_tab() -> None:
                      t("recommend.score_label", lang): v.get("score", "")}
                     for k, v in score_details.items()
                 ]
-                st.dataframe(pd.DataFrame(sd_list), hide_index=True, use_container_width=True)
+                st.dataframe(pd.DataFrame(sd_list), hide_index=True, width="stretch")
 
             news = rec.get("news", [])
             if news:
@@ -1374,7 +1186,7 @@ def render_recommendations_tab() -> None:
                 st.markdown(f"*{t('recommend.sec_na', lang)}*")
 
             chart_visible_key = f"chart_visible_{ticker}"
-            if st.button(t("chart.show", lang), key=f"chart_btn_{ticker}", use_container_width=True):
+            if st.button(t("chart.show", lang), key=f"chart_btn_{ticker}", width="stretch"):
                 st.session_state[chart_visible_key] = not st.session_state.get(chart_visible_key, False)
 
             if st.session_state.get(chart_visible_key, False):
@@ -1393,7 +1205,7 @@ def render_recommendations_tab() -> None:
                     fig = _build_tech_chart(ticker, interval=selected_interval, lang=lang)
                     if fig:
                         st.plotly_chart(
-                            fig, use_container_width=True,
+                            fig, width="stretch",
                             config={
                                 "modeBarButtonsToAdd": [
                                     "drawline", "drawopenpath", "drawcircle",
@@ -1427,7 +1239,7 @@ def render_rankings_tab() -> None:
         return [""] * len(row)
 
     styled = df.style.apply(color_top_rows, axis=1)
-    st.dataframe(styled, hide_index=True, use_container_width=True, height=600)
+    st.dataframe(styled, hide_index=True, width="stretch", height=600)
 
 
 def render_compare_tab() -> None:
@@ -1482,7 +1294,7 @@ def render_compare_tab() -> None:
                 row[ticker] = fmt.format(val)
         rows.append(row)
 
-    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
 
     chart_metrics = [
         ("total_score", "Score"), ("revenue_growth", "Rev%"), ("eps_growth", "EPS%"),
@@ -1505,7 +1317,7 @@ def render_compare_tab() -> None:
         color=alt.Color(f"{t('compare.stock', lang)}:N", legend=alt.Legend(orient="top")),
         column=alt.Column(f"{t('compare.stock', lang)}:N", title=None),
     ).properties(height=300)
-    st.altair_chart(chart, use_container_width=True)
+    st.altair_chart(chart, width="stretch")
 
 
 def _valuation_label(value: Optional[float], ranges: List[float], lang: str) -> str:
@@ -1557,11 +1369,11 @@ def render_valuation_tab() -> None:
                 "Value": [f"{v:.2f}" if v else "N/A" for v in vals],
                 t("valuation.judgment", lang): jdg,
             })
-            st.dataframe(jdg_df, hide_index=True, use_container_width=True, height=200)
+            st.dataframe(jdg_df, hide_index=True, width="stretch", height=200)
 
     st.subheader(t("valuation.full_table", lang))
     display_cols = [t("valuation.ticker", lang), t("valuation.name", lang)] + list(VALUATION_LABELS.values()) + [t("valuation.growth", lang)]
-    st.dataframe(df[display_cols], hide_index=True, use_container_width=True, height=600)
+    st.dataframe(df[display_cols], hide_index=True, width="stretch", height=600)
 
 
 def render_charts_tab() -> None:
@@ -1596,7 +1408,7 @@ def render_charts_tab() -> None:
             y=alt.Y(f"{label}:Q", title=None),
         ).properties(height=250)
         st.subheader(label)
-        st.altair_chart(chart, use_container_width=True)
+        st.altair_chart(chart, width="stretch")
 
     if "revenue" in data and "net_income" in data:
         rev = data["revenue"]
@@ -1608,7 +1420,7 @@ def render_charts_tab() -> None:
             y=alt.Y(f"{t('charts.margin', lang)}:Q", title=None),
         ).properties(height=250)
         st.subheader(t("charts.margin", lang))
-        st.altair_chart(cm, use_container_width=True)
+        st.altair_chart(cm, width="stretch")
 
 
 def render_news_tab() -> None:
@@ -1666,7 +1478,7 @@ def render_ai_status_tab() -> None:
                     t("ai.rate", lang): f"{rate:.0f}%",
                     t("ai.status", lang): info.get("last_status", t("ai.unknown", lang)),
                 })
-            st.dataframe(pd.DataFrame(health_rows), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame(health_rows), hide_index=True, width="stretch")
         else:
             st.info(t("ai.no_source", lang))
 
@@ -1713,15 +1525,16 @@ def render_stock_pool_tab() -> None:
             "Ticker": s["ticker"],
             "Name": _stock_name(s, lang),
             "Sector": _sector_name(sec, lang),
+            "Tier": t(f"universe.{s.get('universe_tier', 'satellite' if is_custom else 'core')}", lang),
             "Custom": "⭐" if is_custom else "",
         })
 
     df = pd.DataFrame(rows)
-    st.dataframe(df, hide_index=True, use_container_width=True, height=500)
+    st.dataframe(df, hide_index=True, width="stretch", height=500)
 
     st.subheader("📊 " + t("sidebar.stock_pool", lang))
     sec_counts = df.groupby("Sector").size().reset_index(name="Count")
-    st.dataframe(sec_counts, hide_index=True, use_container_width=True)
+    st.dataframe(sec_counts, hide_index=True, width="stretch")
 
 
 def export_csv() -> None:
@@ -1736,7 +1549,7 @@ def export_csv() -> None:
         data=buf.getvalue(),
         file_name=f"stock_analysis_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv",
         mime="text/csv",
-        use_container_width=True,
+        width="stretch",
     )
 
 
@@ -1793,18 +1606,25 @@ def render_industry_news_tab() -> None:
             st.markdown("---")
 
 
-def render_backtest_tab() -> None:
+def render_backtest_tab(selected_tickers: Optional[List[str]] = None) -> None:
     lang = st.session_state.get("lang", "zh_tw")
     st.subheader(t("backtest.title", lang))
     st.caption(t("backtest.desc", lang))
 
-    col1, col2, col3 = st.columns([2, 2, 1])
+    col1, col2, col3, col4 = st.columns([2, 1.2, 1.5, 1])
     with col1:
-        use_fund = st.checkbox("Use fundamentals (slower, more accurate)", value=True)
+        use_fund = st.checkbox(t("backtest.use_fundamentals", lang), value=True)
     with col2:
-        years = st.selectbox("Backtest years", [3, 5], index=1)
+        years = st.selectbox(t("backtest.years", lang), [3, 5], index=1)
     with col3:
-        run = st.button(t("backtest.run", lang), type="primary", use_container_width=True)
+        weighting_label = st.selectbox(
+            t("backtest.weighting", lang),
+            [t("backtest.equal", lang), t("backtest.calibrated_kelly", lang)],
+        )
+        weighting = "equal" if weighting_label == t("backtest.equal", lang) else "calibrated_kelly"
+    with col4:
+        cost_bps = st.number_input(t("backtest.cost_bps", lang), min_value=0.0, max_value=100.0, value=15.0, step=1.0)
+        run = st.button(t("backtest.run", lang), type="primary", width="stretch")
 
     if run:
         import datetime as dt
@@ -1820,16 +1640,41 @@ def render_backtest_tab() -> None:
 
         from backtesting.engine import run_backtest, format_backtest_summary
 
-        result = run_backtest(start=start_str, end=end_str, use_fundamentals=use_fund, progress_callback=progress)
+        result = run_backtest(
+            start=start_str,
+            end=end_str,
+            use_fundamentals=use_fund,
+            progress_callback=progress,
+            selected_tickers=selected_tickers,
+            weighting=weighting,
+            transaction_cost_bps=cost_bps,
+            persist_calibration=True,
+        )
         summary = format_backtest_summary(result)
 
         st.session_state.backtest_summary = summary
-        status.update(label="✅ Backtest complete!", state="complete", expanded=False)
+        status.update(label=t("backtest.complete", lang), state="complete", expanded=False)
 
     summary = st.session_state.get("backtest_summary")
     if not summary:
         st.info(t("backtest.no_data", lang))
         return
+
+    for warning in summary.get("warnings", []):
+        warning_key = f"backtest.warning.{warning.get('code', '')}"
+        translated = t(warning_key, lang)
+        st.warning(warning.get("message", "") if translated == warning_key else translated)
+
+    coverage = summary.get("coverage", {})
+    if coverage:
+        st.caption(t(
+            "backtest.coverage_summary",
+            lang,
+            prices=f"{coverage.get('tickers_with_prices', 0)}/{coverage.get('requested_tickers', 0)}",
+            technical=coverage.get("avg_technical_pct", 0),
+            fundamental=coverage.get("avg_fundamental_pct", 0),
+            costs=summary.get("total_transaction_cost", 0),
+        ))
 
     st.markdown("---")
     cols = st.columns(4)
@@ -1870,22 +1715,10 @@ def render_backtest_tab() -> None:
     ])
 
     with tab1:
-        dates = [p["date"] for p in periods]
-        strategy_vals = []
-        spy_vals = []
-        val = 10000
-        spy_val = 10000
-        strategy_vals.append(val)
-        spy_vals.append(spy_val)
-        label_dates = [dates[0] - pd.DateOffset(months=1)] if dates else []
-        for p in periods:
-            if p.get("avg_return") is not None:
-                val *= (1 + p["avg_return"] / 100)
-            if p.get("spy_return") is not None:
-                spy_val *= (1 + p["spy_return"] / 100)
-            strategy_vals.append(val)
-            spy_vals.append(spy_val)
-            label_dates.append(p["date"])
+        equity_curve = summary.get("equity_curve", [])
+        label_dates = [point["date"] for point in equity_curve]
+        strategy_vals = [point["portfolio"] for point in equity_curve]
+        spy_vals = [point["spy"] for point in equity_curve]
 
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=label_dates, y=strategy_vals, mode="lines",
@@ -1897,8 +1730,10 @@ def render_backtest_tab() -> None:
             yaxis_title="Portfolio Value ($)",
             hovermode="x unified",
             legend=dict(orientation="h", y=1.1),
+            template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(7,11,18,.55)",
+            font=dict(color="#9fb0c3", family="SFMono-Regular, Consolas, monospace"),
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     with tab2:
         monthly = []
@@ -1931,8 +1766,10 @@ def render_backtest_tab() -> None:
                 hovermode="x unified",
                 showlegend=True,
                 legend=dict(orientation="h", y=1.1),
+                template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(7,11,18,.55)",
+                font=dict(color="#9fb0c3", family="SFMono-Regular, Consolas, monospace"),
             )
-            st.plotly_chart(fig2, use_container_width=True)
+            st.plotly_chart(fig2, width="stretch")
 
     with tab3:
         top_picks = summary.get("tickers_picked", {})
@@ -1951,8 +1788,8 @@ def render_backtest_tab() -> None:
                     orientation="h",
                     marker_color="#00d4aa",
                 ))
-                fig3.update_layout(height=400, margin=dict(l=20, r=20, t=10, b=20), xaxis_title="Times Picked")
-                st.plotly_chart(fig3, use_container_width=True)
+                fig3.update_layout(height=400, margin=dict(l=20, r=20, t=10, b=20), xaxis_title="Times Picked", template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(7,11,18,.55)", font=dict(color="#9fb0c3"))
+                st.plotly_chart(fig3, width="stretch")
 
         with col_b:
             st.subheader(t("backtest.sector_breakdown", lang))
@@ -1965,8 +1802,8 @@ def render_backtest_tab() -> None:
                     labels=df_sec["Sector"], values=df_sec["Picks"],
                     hole=0.4,
                 ))
-                fig4.update_layout(height=400, margin=dict(l=20, r=20, t=10, b=20))
-                st.plotly_chart(fig4, use_container_width=True)
+                fig4.update_layout(height=400, margin=dict(l=20, r=20, t=10, b=20), template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(7,11,18,.55)", font=dict(color="#9fb0c3"))
+                st.plotly_chart(fig4, width="stretch")
 
     with tab4:
         if periods:
@@ -1988,7 +1825,7 @@ def render_backtest_tab() -> None:
                     del row["Fund Score"]
                 rows.append(row)
             df_detail = pd.DataFrame(rows)
-            st.dataframe(df_detail, hide_index=True, use_container_width=True, height=500)
+            st.dataframe(df_detail, hide_index=True, width="stretch", height=500)
 
 
 def render_portfolio_tab() -> None:
@@ -2022,6 +1859,18 @@ def render_portfolio_tab() -> None:
         unsafe_allow_html=True,
     )
 
+    risk_positions = [p.get("risk_metrics", {}) for p in positions if p.get("risk_metrics", {}).get("available")]
+    if risk_positions:
+        st.subheader(t("portfolio.risk_overview", lang))
+        risk_cols = st.columns(3)
+        with risk_cols[0]:
+            st.metric("Avg volatility", f"{sum(p['annual_volatility_pct'] for p in risk_positions) / len(risk_positions):.1f}%")
+        with risk_cols[1]:
+            st.metric("Worst VaR 95%", f"{min(p['var_95_daily_pct'] for p in risk_positions):.2f}%")
+        with risk_cols[2]:
+            high_risk = sum(p.get("risk_level") == "high" for p in risk_positions)
+            st.metric("High-risk positions", f"{high_risk}/{len(risk_positions)}")
+
     high_corr = portfolio.get("high_corr_pairs", [])
     if high_corr:
         with st.expander(t("portfolio.high_corr", lang), expanded=True):
@@ -2048,16 +1897,18 @@ def render_portfolio_tab() -> None:
             t("portfolio.pnl_pct", lang): f"{p['pnl_pct']:+.1f}%",
             t("portfolio.stop_loss", lang): f"${p['stop_loss']:.2f}",
             t("portfolio.target", lang): f"${p['target_price']:.2f}" if p.get("target_price") else "N/A",
+            "Risk": p.get("risk_metrics", {}).get("risk_level", "unknown").upper(),
+            "Volatility": f"{p.get('risk_metrics', {}).get('annual_volatility_pct', 0):.1f}%" if p.get("risk_metrics", {}).get("available") else "N/A",
         })
     import pandas as pd
-    st.dataframe(pd.DataFrame(pos_rows), hide_index=True, use_container_width=True, height=400)
+    st.dataframe(pd.DataFrame(pos_rows), hide_index=True, width="stretch", height=400)
 
     with st.expander(t("portfolio.journal", lang)):
         from agents.portfolio_manager import get_journal
         journal = get_journal()
         if journal:
             import pandas as _pd
-            st.dataframe(_pd.DataFrame(journal), hide_index=True, use_container_width=True, height=300)
+            st.dataframe(_pd.DataFrame(journal), hide_index=True, width="stretch", height=300)
         else:
             st.caption(t("portfolio.journal_empty", lang))
 
@@ -2085,9 +1936,19 @@ try {
 
     lang = st.session_state.get("lang", "zh_tw")
 
-    st.markdown(f'<p class="app-title">📈 {t("app.title", lang)}</p>', unsafe_allow_html=True)
-    st.markdown(f'<p class="app-subtitle">{t("app.subtitle", lang)}</p>', unsafe_allow_html=True)
-    st.markdown("<hr>", unsafe_allow_html=True)
+    st.markdown(
+        f"""
+        <div class="terminal-header">
+            <div>
+                <div class="brand-kicker">Quant Research Terminal</div>
+                <p class="app-title">ALPHA<span>//</span>DESK</p>
+                <p class="app-subtitle">{html.escape(t("app.subtitle", lang))}</p>
+            </div>
+            <div class="terminal-live"><span class="live-dot"></span>System online · {len(STOCK_UNIVERSE)} assets</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     params = build_sidebar()
 
@@ -2116,7 +1977,7 @@ try {
     with tabs[0]:
         render_stock_pool_tab()
     with tabs[1]:
-        render_backtest_tab()
+        render_backtest_tab(params.get("selected_tickers"))
 
     if show_tabs:
         with tabs[2]:

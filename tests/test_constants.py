@@ -6,8 +6,8 @@ from utils.constants import (
 )
 
 
-def test_stock_universe_has_44_stocks() -> None:
-    assert len(STOCK_UNIVERSE) == 44
+def test_stock_universe_is_broad_but_bounded() -> None:
+    assert 70 <= len(STOCK_UNIVERSE) <= 80
 
 
 def test_stock_universe_all_have_ticker_and_name() -> None:
@@ -15,6 +15,17 @@ def test_stock_universe_all_have_ticker_and_name() -> None:
         assert "ticker" in stock
         assert "name_cn" in stock
         assert len(stock["ticker"]) > 0
+        assert stock["universe_tier"] in {"core", "satellite"}
+
+
+def test_stock_universe_tickers_are_unique() -> None:
+    tickers = [stock["ticker"] for stock in STOCK_UNIVERSE]
+    assert len(tickers) == len(set(tickers))
+
+
+def test_satellite_universe_is_limited() -> None:
+    satellites = [stock for stock in STOCK_UNIVERSE if stock["universe_tier"] == "satellite"]
+    assert len(satellites) <= 12
 
 
 def test_scoring_weights_sum_positive() -> None:

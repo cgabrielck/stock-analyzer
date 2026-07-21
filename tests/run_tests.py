@@ -5,8 +5,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
 # Test constants
 from utils.constants import STOCK_UNIVERSE, SCORING_WEIGHTS, SECTOR_CN_MAP, CACHE_TTL
 
-assert len(STOCK_UNIVERSE) == 44, f"Expected 44 stocks, got {len(STOCK_UNIVERSE)}"
-print("✅ constants: 44 stocks")
+assert 70 <= len(STOCK_UNIVERSE) <= 80, f"Expected 70-80 stocks, got {len(STOCK_UNIVERSE)}"
+print(f"✅ constants: {len(STOCK_UNIVERSE)} stocks")
 
 for stock in STOCK_UNIVERSE:
     assert "ticker" in stock

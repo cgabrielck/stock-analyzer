@@ -405,7 +405,8 @@ def _fetch_yahoo_fundamentals(ticker: str) -> Optional[Dict[str, Any]]:
             fields["roe"] = raw * 100
         raw = fin.get("debtToEquity", {}).get("raw")
         if raw is not None:
-            fields["debt_equity"] = raw
+            # Yahoo reports debtToEquity in percentage points (150 means 1.5x).
+            fields["debt_equity"] = raw / 100.0
         raw = fin.get("pegRatio", {}).get("raw")
         if raw is not None:
             fields["peg"] = raw

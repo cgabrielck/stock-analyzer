@@ -7,6 +7,9 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
+from agents.risk_analyzer import fetch_risk_metrics
+from backtesting.calibration import load_calibration_snapshot, probability_from_snapshot
+
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data")
 JOURNAL_PATH = os.path.join(DATA_DIR, "trade_journal.json")
@@ -69,6 +72,42 @@ def normalize_capped_weights(
     return {ticker: round(allocated[ticker], 4) for ticker in weights}
 
 
+def calculate_portfolio_weights(
+    recommendations: List[Dict[str, Any]],
+    calibration: Optional[Dict[str, Any]] = None,
+    target_allocation: float = TOTAL_ALLOCATION,
+) -> Tuple[Dict[str, float], str]:
+    if not recommendations:
+        return {}, "equal"
+
+    snapshot = calibration if calibration is not None else load_calibration_snapshot()
+    probabilities = {
+        recommendation["ticker"]: probability_from_snapshot(
+            recommendation.get("total_score", 0) or 0,
+            snapshot,
+        ) if snapshot else None
+        for recommendation in recommendations
+    }
+    if not snapshot or any(probability is None for probability in probabilities.values()):
+        equal = {recommendation["ticker"]: 1.0 for recommendation in recommendations}
+        return normalize_capped_weights(equal, target_allocation=target_allocation), "equal"
+
+    raw_weights: Dict[str, float] = {}
+    for recommendation in recommendations:
+        ticker = recommendation["ticker"]
+        price = recommendation.get("price")
+        target = recommendation.get("target_mean_price")
+        upside = (target / price) - 1 if price and target and target > price else DEFAULT_UPISDE_PCT
+        beta = recommendation.get("beta")
+        downside = min(DEFAULT_STOP_LOSS_PCT * beta, 0.25) if beta and beta > 0 else DEFAULT_STOP_LOSS_PCT
+        raw_weights[ticker] = kelly_fraction(probabilities[ticker], upside, downside)
+
+    if not any(raw_weights.values()):
+        equal = {recommendation["ticker"]: 1.0 for recommendation in recommendations}
+        return normalize_capped_weights(equal, target_allocation=target_allocation), "equal"
+    return normalize_capped_weights(raw_weights, target_allocation=target_allocation), "calibrated_kelly"
+
+
 def compute_correlations(tickers: List[str], period: str = "1y") -> Tuple[Optional[pd.DataFrame], List[Tuple[str, str, float]]]:
     valid = [t for t in tickers if t]
     if len(valid) < 2:
@@ -87,7 +126,7 @@ def compute_correlations(tickers: List[str], period: str = "1y") -> Tuple[Option
         for i in range(len(corr.columns)):
             for j in range(i + 1, len(corr.columns)):
                 val = corr.iloc[i, j]
-                if abs(val) >= CORR_THRESHOLD:
+                if val >= CORR_THRESHOLD:
                     high_pairs.append((corr.columns[i], corr.columns[j], round(val, 3)))
         return corr, high_pairs
     except Exception:
@@ -144,38 +183,14 @@ def log_trade(ticker: str, action: str, price: float, shares: int, reason: str =
 def build_portfolio(
     recommendations: List[Dict[str, Any]],
     total_capital: float = 100000.0,
+    target_allocation: float = TOTAL_ALLOCATION,
 ) -> Dict[str, Any]:
     saved = _load_portfolio_state()
     old_positions = saved.get("positions", {})
     all_tickers = [r["ticker"] for r in recommendations]
     corr, high_pairs = compute_correlations(all_tickers)
 
-    total_score = sum(r.get("total_score", 0) for r in recommendations)
-    weights: Dict[str, float] = {}
-    for r in recommendations:
-        score = r.get("total_score", 0)
-        if total_score <= 0:
-            weights[r["ticker"]] = TOTAL_ALLOCATION / max(len(recommendations), 1)
-            continue
-
-        win_prob = score / 100.0
-        price = r.get("price")
-        target = r.get("target_mean_price")
-        if price and target and target > price:
-            upside = (target / price) - 1
-        else:
-            upside = DEFAULT_UPISDE_PCT
-
-        beta = r.get("beta")
-        if beta and beta > 0:
-            downside = min(DEFAULT_STOP_LOSS_PCT * beta, 0.25)
-        else:
-            downside = DEFAULT_STOP_LOSS_PCT
-
-        f = kelly_fraction(win_prob, upside, downside)
-        weights[r["ticker"]] = f
-
-    weights = normalize_capped_weights(weights)
+    weights, weighting_method = calculate_portfolio_weights(recommendations, target_allocation=target_allocation)
 
     positions: List[Dict[str, Any]] = []
     for r in recommendations:
@@ -216,12 +231,14 @@ def build_portfolio(
             "shares": shares,
             "weight": weight,
             "kelly_pct": round(weight * 100, 1),
+            "weighting_method": weighting_method,
             "stop_loss": stop_loss,
             "target_price": target,
             "total_score": r.get("total_score", 0),
             "pnl": round(pnl, 2),
             "pnl_pct": round(pnl_pct, 2),
             "stop_hit": price <= stop_loss,
+            "risk_metrics": r.get("risk_metrics", {"available": False, "risk_level": "unknown"}),
         })
 
     positions.sort(key=lambda p: p["weight"], reverse=True)
@@ -237,6 +254,13 @@ def build_portfolio(
     }
     _save_portfolio_state(new_state)
 
+    missing_risk = [position["ticker"] for position in positions if not position["risk_metrics"].get("available")]
+    if missing_risk:
+        risk_by_ticker = fetch_risk_metrics(missing_risk)
+        for position in positions:
+            if position["ticker"] in risk_by_ticker:
+                position["risk_metrics"] = risk_by_ticker[position["ticker"]]
+
     return {
         "positions": positions,
         "total_capital": total_capital,
@@ -248,6 +272,7 @@ def build_portfolio(
         "high_corr_pairs": high_pairs,
         "correlation_df": corr,
         "num_positions": len(positions),
+        "weighting_method": weighting_method,
     }
 
 

@@ -34,6 +34,41 @@ def kelly_fraction(win_prob: float, upside_pct: float, downside_pct: float = DEF
     return max(0.0, min(f, MAX_KELLY_FRACTION))
 
 
+def normalize_capped_weights(
+    weights: Dict[str, float],
+    target_allocation: float = TOTAL_ALLOCATION,
+    max_weight: float = MAX_KELLY_FRACTION,
+) -> Dict[str, float]:
+    """Scale positive weights while preserving a hard position cap and cash when needed."""
+    active = {ticker: max(0.0, weight) for ticker, weight in weights.items() if weight > 0}
+    if not active:
+        return {ticker: 0.0 for ticker in weights}
+
+    target = min(target_allocation, max_weight * len(active))
+    allocated: Dict[str, float] = {ticker: 0.0 for ticker in weights}
+    remaining = set(active)
+    remaining_target = target
+
+    while remaining and remaining_target > 0:
+        total = sum(active[ticker] for ticker in remaining)
+        if total <= 0:
+            break
+        capped = []
+        for ticker in remaining:
+            proposed = remaining_target * active[ticker] / total
+            if proposed >= max_weight:
+                allocated[ticker] = max_weight
+                remaining_target -= max_weight
+                capped.append(ticker)
+        if not capped:
+            for ticker in remaining:
+                allocated[ticker] = remaining_target * active[ticker] / total
+            break
+        remaining.difference_update(capped)
+
+    return {ticker: round(allocated[ticker], 4) for ticker in weights}
+
+
 def compute_correlations(tickers: List[str], period: str = "1y") -> Tuple[Optional[pd.DataFrame], List[Tuple[str, str, float]]]:
     valid = [t for t in tickers if t]
     if len(valid) < 2:
@@ -140,11 +175,7 @@ def build_portfolio(
         f = kelly_fraction(win_prob, upside, downside)
         weights[r["ticker"]] = f
 
-    total_weight = sum(weights.values())
-    if total_weight > 0:
-        scale = TOTAL_ALLOCATION / total_weight
-        for t in weights:
-            weights[t] = round(weights[t] * scale, 4)
+    weights = normalize_capped_weights(weights)
 
     positions: List[Dict[str, Any]] = []
     for r in recommendations:

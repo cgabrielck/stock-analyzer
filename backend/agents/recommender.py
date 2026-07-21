@@ -14,6 +14,7 @@ FILL_THRESHOLD: float = 50.0
 MAX_PER_SECTOR: int = 2
 TOP_N: int = 5
 TECHNICAL_CANDIDATES: int = 15
+MIN_RECOMMENDATION_METRICS: int = 4
 
 
 def run_full_analysis(
@@ -56,19 +57,29 @@ def run_full_analysis(
             s["sector"] = custom_sec
         s["sector_cn"] = SECTOR_CN_MAP.get(s.get("sector"), s.get("sector", "未知"))
 
-    use_llm = llm_available()
+    tickers = [stock["ticker"] for stock in scored]
+    tech_data = compute_all_technical(tickers, force_refresh=force_refresh)
+    for stock in scored:
+        tech = tech_data.get(stock["ticker"], {})
+        tech_score = tech.get("technical_score")
+        stock["technical_score"] = tech_score
+        if tech_score is not None:
+            stock["base_score"] = round(stock.get("growth_score", 0) * 0.7 + tech_score * 0.3, 1)
+            stock["total_score"] = stock["base_score"]
 
+    use_llm = llm_available()
     if use_llm:
-        candidates = scored[:TECHNICAL_CANDIDATES]
-        tickers = [s["ticker"] for s in candidates]
-        tech_data = compute_all_technical(tickers)
+        candidates = sorted(
+            scored, key=lambda stock: stock.get("total_score", 0) or 0, reverse=True,
+        )[:TECHNICAL_CANDIDATES]
         scored_with_llm = analyze_stocks_batch(candidates, tech_data, lang, progress_callback, llm_weight)
         llm_tickers = {s["ticker"] for s in scored_with_llm}
         rest = [s for s in scored if s["ticker"] not in llm_tickers]
         scored = scored_with_llm + rest
 
-    pool = [s for s in scored if (s.get("total_score") or 0) >= ENTRY_THRESHOLD]
-    skipped = [s for s in scored if (s.get("total_score") or 0) < ENTRY_THRESHOLD]
+    eligible = [s for s in scored if s.get("metrics_used", 0) >= MIN_RECOMMENDATION_METRICS]
+    pool = [s for s in eligible if (s.get("total_score") or 0) >= ENTRY_THRESHOLD]
+    skipped = [s for s in eligible if (s.get("total_score") or 0) < ENTRY_THRESHOLD]
 
     sector_count: Dict[str, int] = {}
     deduped: List[Dict[str, Any]] = []

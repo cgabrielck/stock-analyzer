@@ -164,9 +164,9 @@ def analyze_stocks_batch(
 
         if stock.get("llm_score") is not None:
             llm_w = llm_weight
-            fundamental_w = 1.0 - llm_w
+            base_w = 1.0 - llm_w
             stock["total_score"] = round(
-                stock.get("growth_score", 0) * fundamental_w +
+                stock.get("base_score", stock.get("growth_score", 0)) * base_w +
                 stock["llm_score"] * llm_w,
                 1
             )

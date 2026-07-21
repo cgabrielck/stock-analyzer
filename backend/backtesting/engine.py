@@ -38,7 +38,7 @@ FILING_LAG_DAYS: int = 60
 MAX_WORKERS: int = 5
 DEFAULT_START: str = "2020-01-01"
 TECH_CANDIDATES: int = 15
-ENTRY_THRESHOLD: float = 50.0
+ENTRY_THRESHOLD: float = 60.0
 MAX_PER_SECTOR: int = 2
 TOP_N: int = 5
 
@@ -114,10 +114,13 @@ def _find_recent_quarter(qf: pd.DataFrame, as_of: pd.Timestamp) -> Tuple[int, in
     cutoff = as_of - timedelta(days=FILING_LAG_DAYS)
     available = [c for c in qf.columns if pd.Timestamp(c) <= cutoff]
     if not available:
-        available = [qf.columns[-1]]
+        return -1, -1
     col = min(available, key=lambda c: abs((pd.Timestamp(c) - cutoff).days))
     idx = list(qf.columns).index(col)
-    prev = min(idx + 1, len(qf.columns) - 1)
+    # Quarterly growth must compare the same fiscal quarter one year earlier.
+    prev = idx + 4
+    if prev >= len(qf.columns):
+        return -1, -1
     return idx, prev
 
 
@@ -131,6 +134,9 @@ def _extract_fundamentals_as_of(
         return {}
 
     idx, prev = _find_recent_quarter(qf, as_of)
+    if idx < 0 or prev < 0:
+        # Never substitute a future report for an unavailable historical one.
+        return {}
     result: Dict[str, Any] = {}
 
     try:
@@ -160,7 +166,11 @@ def _extract_fundamentals_as_of(
                 result["eps_growth"] = float((eps_current / eps_prev - 1) * 100)
 
         if bs is not None and not bs.empty:
-            bs_idx = idx if idx < len(bs.columns) else len(bs.columns) - 1
+            bs_available = [c for c in bs.columns if pd.Timestamp(c) <= as_of - timedelta(days=FILING_LAG_DAYS)]
+            if not bs_available:
+                return result
+            bs_col = min(bs_available, key=lambda c: abs((pd.Timestamp(c) - (as_of - timedelta(days=FILING_LAG_DAYS))).days))
+            bs_idx = list(bs.columns).index(bs_col)
             equity = None
             if "Stockholders Equity" in bs.index:
                 eq_val = bs.loc["Stockholders Equity"].iloc[bs_idx]
@@ -184,7 +194,10 @@ def _extract_fundamentals_as_of(
                 result["debt_equity"] = round(total_debt / equity, 4)
 
         if price_df is not None and not price_df.empty:
-            current_price = float(price_df["Close"].iloc[-1])
+            price_as_of = price_df[price_df.index <= as_of]
+            if price_as_of.empty:
+                return result
+            current_price = float(price_as_of["Close"].iloc[-1])
             if current_price > 0 and eps_current is not None and pd.notna(eps_current) and eps_current != 0:
                 pe = current_price / abs(float(eps_current)) if eps_current != 0 else None
                 eps_g = result.get("eps_growth", 0)
@@ -342,6 +355,7 @@ def run_backtest(
         end=pd.Timestamp(end_date),
         freq="ME",
     ))
+    end_timestamp = pd.Timestamp(end_date)
 
     sample_tz = next((df.index.tz for df in price_data.values() if df is not None and not df.empty), None)
     reb_dates_tz = [d.tz_localize(sample_tz) if sample_tz else d for d in rebalance_dates]
@@ -361,6 +375,9 @@ def run_backtest(
     spy_values: List[float] = []
 
     for i, (reb_date, reb_date_tz) in enumerate(zip(rebalance_dates, reb_dates_tz)):
+        # A final partial month has no comparable forward return.
+        if reb_date + pd.DateOffset(months=1) > end_timestamp:
+            continue
         if progress_callback:
             progress_callback(i + 1, len(rebalance_dates),
                               f"Rebalancing {reb_date.date()}...")
@@ -412,6 +429,7 @@ def run_backtest(
             scored.append(entry)
 
         scored.sort(key=lambda x: x.get("total_score", 0) or 0, reverse=True)
+        scored = [s for s in scored if (s.get("total_score") or 0) >= ENTRY_THRESHOLD]
 
         sector_count: Dict[str, int] = {}
         picks: List[Dict[str, Any]] = []
@@ -528,12 +546,12 @@ def _compute_aggregate_metrics(
         result.worst_month_pct = round(min(returns), 2)
 
         returns_arr = np.array(returns)
-        result.volatility_pct = round(float(np.std(returns_arr)), 2)
+        result.volatility_pct = round(float(np.std(returns_arr, ddof=1) * math.sqrt(12)), 2) if len(returns_arr) > 1 else 0.0
 
-        if result.volatility_pct > 0:
+        if len(returns_arr) > 1 and np.std(returns_arr, ddof=1) > 0:
             risk_free = 0.0
             excess = np.mean(returns_arr) - risk_free
-            result.sharpe_ratio = round(float(excess / np.std(returns_arr)), 2)
+            result.sharpe_ratio = round(float(excess / np.std(returns_arr, ddof=1) * math.sqrt(12)), 2)
 
         if portfolio_values:
             peak = portfolio_values[0]

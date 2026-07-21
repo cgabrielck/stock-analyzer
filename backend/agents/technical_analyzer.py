@@ -71,10 +71,58 @@ def _compute_atr(high: pd.Series, low: pd.Series, close: pd.Series, length: int 
     return float(atr.iloc[-1]) if not pd.isna(atr.iloc[-1]) else None
 
 
-def compute_technical_indicators(ticker: str, period: str = "6mo") -> Dict[str, Any]:
-    cached = cache.get(f"tech_{ticker}", "info")
-    if cached:
-        return cached
+def calculate_technical_score(data: Dict[str, Any]) -> float:
+    """Score live technical data using the same rules as the walk-forward backtest."""
+    rsi = data.get("rsi_14")
+    macd_hist = data.get("macd_histogram")
+    sma20 = data.get("sma_20")
+    sma50 = data.get("sma_50")
+    price = data.get("price")
+    volume_ratio = data.get("volume_ratio_10_50")
+    bb_upper = data.get("bb_upper")
+    bb_lower = data.get("bb_lower")
+    total = 0
+
+    if sma20 and sma50 and sma20 > sma50:
+        total += 25
+    elif sma20 and sma50 and sma20 < sma50:
+        total += 5
+    if rsi is not None:
+        if 40 <= rsi <= 60:
+            total += 20
+        elif 30 <= rsi < 40:
+            total += 15
+        elif rsi < 30:
+            total += 10
+        elif rsi > 70:
+            total += 5
+    if macd_hist is not None:
+        total += 15 if macd_hist > 0 else 5
+    if volume_ratio is not None:
+        total += 10 if volume_ratio > 0.8 else 5 if volume_ratio < 0.5 else 0
+    if price and sma50 and sma50 > 0:
+        price_vs_sma50 = (price / sma50 - 1) * 100
+        if -5 <= price_vs_sma50 <= 5:
+            total += 10
+        elif price_vs_sma50 > 5:
+            total += 5
+        elif price_vs_sma50 < -15:
+            total -= 5
+    if bb_lower and bb_upper and price:
+        if price <= bb_lower:
+            total += 15
+        elif price >= bb_upper:
+            total += 5
+    return round(max(0, min(100, total)), 1)
+
+
+def compute_technical_indicators(
+    ticker: str, period: str = "6mo", force_refresh: bool = False,
+) -> Dict[str, Any]:
+    if not force_refresh:
+        cached = cache.get(f"tech_{ticker}", "info")
+        if cached:
+            return cached
 
     try:
         stock = yf.Ticker(ticker)
@@ -120,6 +168,7 @@ def compute_technical_indicators(ticker: str, period: str = "6mo") -> Dict[str, 
         }
 
         _enrich_interpretation(result)
+        result["technical_score"] = calculate_technical_score(result)
 
         agent_state.log_source_result(f"technical:{ticker}", True)
         cache.set(f"tech_{ticker}", "info", result)
@@ -166,10 +215,14 @@ def _enrich_interpretation(data: Dict[str, Any]) -> None:
 
 def compute_all_technical(
     tickers: list[str],
+    force_refresh: bool = False,
 ) -> Dict[str, Dict[str, Any]]:
     results: Dict[str, Dict[str, Any]] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        future_map = {executor.submit(compute_technical_indicators, t): t for t in tickers}
+        future_map = {
+            executor.submit(compute_technical_indicators, t, "6mo", force_refresh): t
+            for t in tickers
+        }
         for future in concurrent.futures.as_completed(future_map):
             ticker = future_map[future]
             try:

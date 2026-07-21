@@ -7,13 +7,35 @@ import requests
 _SESSION = requests.Session()
 _SESSION.headers.update({"Referer": "https://finance.sina.com.cn"})
 
-_SINA_CACHE: Dict[str, Dict[str, Any]] = {}
-_EM_FIN_CACHE: Dict[str, Dict[str, Any]] = {}
-_EM_BS_CACHE: Dict[str, Dict[str, Any]] = {}
+_SINA_CACHE: Dict[str, tuple[float, Dict[str, Any]]] = {}
+_EM_FIN_CACHE: Dict[str, tuple[float, Dict[str, Any]]] = {}
+_EM_BS_CACHE: Dict[str, tuple[float, Dict[str, Any]]] = {}
+QUOTE_CACHE_TTL_SECONDS = 60
+FUNDAMENTALS_CACHE_TTL_SECONDS = 6 * 60 * 60
+
+
+def _get_cached(
+    store: Dict[str, tuple[float, Dict[str, Any]]], ticker: str, ttl: int,
+) -> Optional[Dict[str, Any]]:
+    entry = store.get(ticker)
+    if entry and _time.time() - entry[0] < ttl:
+        return dict(entry[1])
+    store.pop(ticker, None)
+    return None
+
+
+def clear_provider_cache(ticker: Optional[str] = None) -> None:
+    """Clear provider-local caches when a user explicitly requests live data."""
+    stores = (_SINA_CACHE, _EM_FIN_CACHE, _EM_BS_CACHE)
+    for store in stores:
+        if ticker:
+            store.pop(ticker, None)
+        else:
+            store.clear()
 
 
 def fetch_sina_quote(ticker: str) -> Optional[Dict[str, Any]]:
-    cached = _SINA_CACHE.get(ticker)
+    cached = _get_cached(_SINA_CACHE, ticker, QUOTE_CACHE_TTL_SECONDS)
     if cached:
         return cached
     try:
@@ -33,14 +55,14 @@ def fetch_sina_quote(ticker: str) -> Optional[Dict[str, Any]]:
             "market_cap": float(data[12]),
             "pe_ratio": float(data[14]),
         }
-        _SINA_CACHE[ticker] = result
+        _SINA_CACHE[ticker] = (_time.time(), result)
         return result
     except Exception:
         return None
 
 
 def fetch_em_financials(ticker: str) -> Optional[Dict[str, Any]]:
-    cached = _EM_FIN_CACHE.get(ticker)
+    cached = _get_cached(_EM_FIN_CACHE, ticker, FUNDAMENTALS_CACHE_TTL_SECONDS)
     if cached:
         return cached
     try:
@@ -67,14 +89,14 @@ def fetch_em_financials(ticker: str) -> Optional[Dict[str, Any]]:
             result["eps"] = float(row["BASIC_EPS"])
         if not result:
             return None
-        _EM_FIN_CACHE[ticker] = result
+        _EM_FIN_CACHE[ticker] = (_time.time(), result)
         return result
     except Exception:
         return None
 
 
 def fetch_em_balance_sheet(ticker: str) -> Optional[Dict[str, Any]]:
-    cached = _EM_BS_CACHE.get(ticker)
+    cached = _get_cached(_EM_BS_CACHE, ticker, FUNDAMENTALS_CACHE_TTL_SECONDS)
     if cached:
         return cached
     try:
@@ -94,7 +116,7 @@ def fetch_em_balance_sheet(ticker: str) -> Optional[Dict[str, Any]]:
         result = {
             "debt_equity": round(total_debt / total_equity, 2) if total_equity else None,
         }
-        _EM_BS_CACHE[ticker] = result
+        _EM_BS_CACHE[ticker] = (_time.time(), result)
         return result
     except Exception:
         return None

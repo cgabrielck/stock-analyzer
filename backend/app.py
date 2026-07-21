@@ -565,9 +565,7 @@ def build_sidebar() -> Dict[str, Any]:
     with col3:
         if st.button(t("sidebar.clear_cache", selected_lang), type="secondary", use_container_width=True):
             from utils.cache import cache
-            cache_dir = os.path.join(os.path.dirname(__file__), "data", "cache")
-            if os.path.exists(cache_dir):
-                shutil.rmtree(cache_dir)
+            cache.clear()
             for key in ["recommendations", "all_rankings", "source_health", "scored_data"]:
                 if key in st.session_state:
                     del st.session_state[key]
@@ -616,8 +614,11 @@ def run_analysis(params: Dict[str, Any]) -> None:
     force_refresh = params.get("force_refresh", False)
     if force_refresh:
         from utils.cache import cache
-        for tk in params.get("selected_tickers", []):
+        tickers = params.get("selected_tickers") or [s["ticker"] for s in STOCK_UNIVERSE]
+        for tk in tickers:
             cache.delete(tk, "info")
+            cache.delete(f"tech_{tk}", "info")
+            cache.delete(f"news_{tk}", "info")
 
     results = run_full_analysis(
         progress_callback=update_progress,
@@ -1021,6 +1022,11 @@ def render_recommendations_tab() -> None:
                 except Exception:
                     pass
             st.caption(t("recommend.fetched_at", lang, time=fetched))
+            source = dq.get("source") or rec.get("data_source") or "unknown"
+            if source == "seed_data":
+                st.warning("Offline seed data: do not treat this recommendation as live analysis.")
+            else:
+                st.caption(f"Data source: {source}")
             avail = dq.get("metrics_available", 0)
             total_m = dq.get("metrics_total", 6)
             ratio = avail / total_m if total_m > 0 else 0

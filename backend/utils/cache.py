@@ -79,6 +79,27 @@ class Cache:
                 with open(path, "w") as f:
                     json.dump(store, f, indent=2)
 
+    def clear(self, category: Optional[str] = None) -> None:
+        """Clear memory and disk entries, including those held by a Cloud worker."""
+        with self._lock:
+            if category is None:
+                self._mem_cache.clear()
+                categories = [fname[:-5] for fname in os.listdir(self._dir) if fname.endswith(".json")]
+            else:
+                self._mem_cache = {
+                    key: value for key, value in self._mem_cache.items()
+                    if not key.startswith(f"{category}:")
+                }
+                categories = [category]
+
+            for name in categories:
+                path = self._path(name)
+                if os.path.exists(path):
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+
     def clear_expired(self) -> None:
         with self._lock:
             from utils.constants import CACHE_TTL

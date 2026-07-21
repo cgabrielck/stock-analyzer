@@ -12,8 +12,9 @@ from utils.price_utils import get_latest_price
 from agents.auto_upgrader import agent_state
 from agents.sec_analyzer import ticker_to_cik
 try:
-    from agents.china_data_fetcher import fetch_china_data, fetch_china_daily
+    from agents.china_data_fetcher import clear_provider_cache, fetch_china_data, fetch_china_daily
 except ImportError:
+    clear_provider_cache = None
     fetch_china_data = None
     fetch_china_daily = None
 
@@ -66,13 +67,18 @@ def fetch_stock_data(ticker: str, force_refresh: bool = False) -> Dict[str, Any]
     if not force_refresh:
         cached = cache.get(ticker, "info")
         if cached:
+            cached = dict(cached)
             cached["data_quality"] = {
                 "from_cache": True,
                 "fetched_at": cached.get("fetched_at", "unknown"),
+                "source": cached.get("data_source", "cache"),
                 "metrics_available": _count_available_metrics(cached),
                 "metrics_total": len(SCORING_KEYS),
             }
             return cached
+
+    if force_refresh and clear_provider_cache:
+        clear_provider_cache(ticker)
 
     last_error: Optional[str] = None
 
@@ -105,6 +111,7 @@ def fetch_stock_data(ticker: str, force_refresh: bool = False) -> Dict[str, Any]
             result: Dict[str, Any] = {
                 "ticker": ticker,
                 "fetched_at": _now_str(),
+                "data_source": "yfinance",
                 "price": latest_price,
                 "price_session": price_session,
                 "pe_ratio": info.get("trailingPE"),
@@ -155,6 +162,7 @@ def fetch_stock_data(ticker: str, force_refresh: bool = False) -> Dict[str, Any]
             result["data_quality"] = {
                 "from_cache": False,
                 "fetched_at": result["fetched_at"],
+                "source": result["data_source"],
                 "metrics_available": _count_available_metrics(result),
                 "metrics_total": len(SCORING_KEYS),
             }
@@ -176,9 +184,11 @@ def fetch_stock_data(ticker: str, force_refresh: bool = False) -> Dict[str, Any]
         )
         china["cik"] = ticker_to_cik(ticker)
         china["fetched_at"] = _now_str()
+        china["data_source"] = "sina_eastmoney"
         china["data_quality"] = {
             "from_cache": False,
             "fetched_at": china["fetched_at"],
+            "source": china["data_source"],
             "metrics_available": _count_available_metrics(china),
             "metrics_total": len(SCORING_KEYS),
         }
@@ -211,6 +221,7 @@ def fetch_stock_data(ticker: str, force_refresh: bool = False) -> Dict[str, Any]
         yahoo_fund["ticker"] = ticker
         yahoo_fund["cik"] = ticker_to_cik(ticker)
         yahoo_fund["fetched_at"] = _now_str()
+        yahoo_fund["data_source"] = "yahoo_quote_summary"
         yahoo_fund["sector"] = next(
             (s["sector"] for s in STOCK_UNIVERSE if s["ticker"] == ticker), None
         )
@@ -219,6 +230,7 @@ def fetch_stock_data(ticker: str, force_refresh: bool = False) -> Dict[str, Any]
         yahoo_fund["data_quality"] = {
             "from_cache": False,
             "fetched_at": yahoo_fund["fetched_at"],
+            "source": yahoo_fund["data_source"],
             "metrics_available": _count_available_metrics(yahoo_fund),
             "metrics_total": len(SCORING_KEYS),
         }
@@ -232,6 +244,7 @@ def fetch_stock_data(ticker: str, force_refresh: bool = False) -> Dict[str, Any]
         fallback["ticker"] = ticker
         fallback["cik"] = cik
         fallback["fetched_at"] = _now_str()
+        fallback["data_source"] = "yahoo_price_seed_fundamentals" if _SEED_DATA.get(ticker) else "yahoo_price_only"
         fallback["sector"] = next(
             (s["sector"] for s in STOCK_UNIVERSE if s["ticker"] == ticker), None
         )
@@ -241,12 +254,28 @@ def fetch_stock_data(ticker: str, force_refresh: bool = False) -> Dict[str, Any]
                       "roe", "debt_equity", "longName"):
                 if k not in fallback and k in seed:
                     fallback[k] = seed[k]
+        fallback["data_quality"] = {
+            "from_cache": False,
+            "fetched_at": fallback["fetched_at"],
+            "source": fallback["data_source"],
+            "metrics_available": _count_available_metrics(fallback),
+            "metrics_total": len(SCORING_KEYS),
+        }
         agent_state.log_source_result(f"fallback:{ticker}", True)
         return fallback
 
     seed = _SEED_DATA.get(ticker)
     if seed:
+        seed = dict(seed)
         seed["fetched_at"] = _now_str()
+        seed["data_source"] = "seed_data"
+        seed["data_quality"] = {
+            "from_cache": False,
+            "fetched_at": seed["fetched_at"],
+            "source": seed["data_source"],
+            "metrics_available": _count_available_metrics(seed),
+            "metrics_total": len(SCORING_KEYS),
+        }
         agent_state.log_source_result(f"seed:{ticker}", True)
         return seed
 

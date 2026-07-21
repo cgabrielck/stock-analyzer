@@ -1,41 +1,177 @@
-from typing import Any, Optional, Tuple
+from datetime import datetime, timezone
+import math
+from typing import Any, Dict, Optional, Tuple
 
+import pandas as pd
 import yfinance as yf
 
 
-def get_latest_price(stock: yf.Ticker, fallback_close: Optional[float] = None) -> Tuple[Optional[float], str]:
-    price = fallback_close
-    session = "Regular Trading Hours"
+SESSION_LABELS = {
+    "PRE": "Pre-Market Trading",
+    "PREPRE": "Overnight Trading",
+    "REGULAR": "Regular Trading Hours",
+    "POST": "After-Hours Trading",
+    "POSTPOST": "After-Hours Trading",
+    "CLOSED": "Market Closed",
+}
 
+
+def get_latest_quote(
+    stock: yf.Ticker,
+    fallback_close: Optional[float] = None,
+    info: Optional[Dict[str, Any]] = None,
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """Return the price for Yahoo's active market session with provenance metadata."""
+    current_time = now or datetime.now(timezone.utc)
     try:
-        info = stock.info
-        pre = info.get("preMarketPrice")
-        post = info.get("postMarketPrice")
-        regular = info.get("currentPrice") or info.get("regularMarketPrice")
-
-        if pre is not None:
-            price = pre
-            session = "Pre-Market Trading"
-        elif post is not None:
-            price = post
-            session = "After-Hours Trading"
-        elif regular is not None:
-            price = regular
-            session = "Regular Trading Hours"
-        else:
-            hist = stock.history(period="2d", prepost=True)
-            if hist is not None and not hist.empty:
-                price = float(hist["Close"].iloc[-1])
-                hour = hist.index[-1].hour
-                if hour < 4:
-                    session = "Overnight Trading"
-                elif hour < 9:
-                    session = "Pre-Market Trading"
-                elif hour < 16:
-                    session = "Regular Trading Hours"
-                else:
-                    session = "After-Hours Trading"
+        quote_info = info if info is not None else stock.info
     except Exception:
-        pass
+        quote_info = {}
 
-    return price, session
+    state = str(quote_info.get("marketState") or "").upper()
+    candidates = {
+        "PRE": _candidate(quote_info, "preMarketPrice", "preMarketTime", "yahoo_pre_market"),
+        "REGULAR": _candidate(quote_info, "regularMarketPrice", "regularMarketTime", "yahoo_regular_market"),
+        "POST": _candidate(quote_info, "postMarketPrice", "postMarketTime", "yahoo_after_hours"),
+    }
+    if candidates["REGULAR"] is None:
+        candidates["REGULAR"] = _candidate(quote_info, "currentPrice", "regularMarketTime", "yahoo_current_price")
+
+    expected = "PRE" if state in {"PRE", "PREPRE"} else "POST" if state in {"POST", "POSTPOST"} else "REGULAR"
+    selected = candidates.get(expected)
+    active_state = state in {"PRE", "PREPRE", "REGULAR", "POST", "POSTPOST"}
+    if active_state and selected and _is_current_candidate(selected, current_time, quote_info, state):
+        return _quote_result(selected, SESSION_LABELS.get(state, SESSION_LABELS[expected]), state, stale=False)
+
+    intraday = _latest_intraday_quote(stock, current_time)
+    if intraday and (not selected or _candidate_time(intraday) >= _candidate_time(selected)):
+        return _quote_result(intraday, _session_from_timestamp(intraday["time"]), state, stale=False)
+
+    if active_state and selected:
+        return _quote_result(selected, SESSION_LABELS.get(state, SESSION_LABELS[expected]), state, stale=True)
+
+    available = [candidate for candidate in candidates.values() if candidate]
+    if available:
+        newest = max(available, key=_candidate_time)
+        session = SESSION_LABELS.get(state, "Market Closed")
+        return _quote_result(newest, session, state or "UNKNOWN", stale=state not in {"PRE", "PREPRE", "REGULAR", "POST", "POSTPOST"})
+
+    if _valid_price(fallback_close):
+        return {
+            "price": float(fallback_close),
+            "session": SESSION_LABELS.get(state, "Regular Trading Hours"),
+            "source": "history_close_fallback",
+            "quote_time": None,
+            "market_state": state or "UNKNOWN",
+            "stale": True,
+        }
+    return {
+        "price": None,
+        "session": SESSION_LABELS.get(state, "Unknown Session"),
+        "source": "unavailable",
+        "quote_time": None,
+        "market_state": state or "UNKNOWN",
+        "stale": True,
+    }
+
+
+def get_latest_price(
+    stock: yf.Ticker,
+    fallback_close: Optional[float] = None,
+    info: Optional[Dict[str, Any]] = None,
+) -> Tuple[Optional[float], str]:
+    quote = get_latest_quote(stock, fallback_close=fallback_close, info=info)
+    return quote["price"], quote["session"]
+
+
+def _candidate(info: Dict[str, Any], price_key: str, time_key: str, source: str) -> Optional[Dict[str, Any]]:
+    price = info.get(price_key)
+    if not _valid_price(price):
+        return None
+    return {"price": float(price), "time": _parse_timestamp(info.get(time_key)), "source": source}
+
+
+def _parse_timestamp(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, pd.Timestamp):
+        timestamp = value.to_pydatetime()
+        return timestamp.astimezone(timezone.utc) if timestamp.tzinfo else timestamp.replace(tzinfo=timezone.utc)
+    try:
+        if isinstance(value, (int, float)) or str(value).strip().isdigit():
+            return datetime.fromtimestamp(float(value), tz=timezone.utc)
+        parsed = pd.to_datetime(value, utc=True)
+        return parsed.to_pydatetime() if not pd.isna(parsed) else None
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _is_current_candidate(candidate: Dict[str, Any], now: datetime, info: Dict[str, Any], state: str) -> bool:
+    quote_time = candidate.get("time")
+    if quote_time is None:
+        return state in {"PRE", "PREPRE", "REGULAR", "POST", "POSTPOST"}
+    delay_minutes = float(info.get("exchangeDataDelayedBy") or 0)
+    allowed_age_seconds = max(900.0, delay_minutes * 60 + 300.0)
+    age_seconds = (now - quote_time).total_seconds()
+    return -120 <= age_seconds <= allowed_age_seconds
+
+
+def _latest_intraday_quote(stock: yf.Ticker, now: datetime) -> Optional[Dict[str, Any]]:
+    try:
+        history = stock.history(period="5d", interval="1m", prepost=True, auto_adjust=False)
+        if history is None or history.empty or "Close" not in history:
+            return None
+        closes = pd.to_numeric(history["Close"], errors="coerce")
+        closes = closes[closes.map(_valid_price)]
+        if closes.empty:
+            return None
+        timestamp = closes.index[-1]
+        quote_time = _parse_timestamp(timestamp)
+        if quote_time is None or (now - quote_time).total_seconds() > 900:
+            return None
+        return {"price": float(closes.iloc[-1]), "time": quote_time, "source": "yahoo_1m_extended_hours"}
+    except Exception:
+        return None
+
+
+def _session_from_timestamp(value: Optional[datetime]) -> str:
+    if value is None:
+        return "Unknown Session"
+    eastern = pd.Timestamp(value).tz_convert("America/New_York")
+    minutes = eastern.hour * 60 + eastern.minute
+    if minutes < 4 * 60:
+        return "Overnight Trading"
+    if minutes < 9 * 60 + 30:
+        return "Pre-Market Trading"
+    if minutes < 16 * 60:
+        return "Regular Trading Hours"
+    if minutes < 20 * 60:
+        return "After-Hours Trading"
+    return "Overnight Trading"
+
+
+def _quote_result(candidate: Dict[str, Any], session: str, state: str, stale: bool) -> Dict[str, Any]:
+    quote_time = candidate.get("time")
+    return {
+        "price": candidate["price"],
+        "session": session,
+        "source": candidate["source"],
+        "quote_time": quote_time.isoformat() if quote_time else None,
+        "market_state": state or "UNKNOWN",
+        "stale": stale,
+    }
+
+
+def _candidate_time(candidate: Dict[str, Any]) -> datetime:
+    return candidate.get("time") or datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _valid_price(value: Any) -> bool:
+    try:
+        number = float(value)
+        return math.isfinite(number) and number > 0
+    except (TypeError, ValueError):
+        return False

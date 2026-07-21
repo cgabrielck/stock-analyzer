@@ -7,7 +7,7 @@ import pandas as pd
 import numpy as np
 
 from utils.cache import cache
-from utils.price_utils import get_latest_price
+from utils.price_utils import get_latest_quote
 from agents.risk_analyzer import calculate_risk_metrics, risk_label
 from agents.auto_upgrader import agent_state
 
@@ -137,7 +137,9 @@ def compute_technical_indicators(
         low = hist["Low"]
 
         last_close = float(close.iloc[-1])
-        current_price, price_session = get_latest_price(stock, last_close)
+        latest_quote = get_latest_quote(stock, fallback_close=last_close)
+        current_price = latest_quote["price"]
+        price_session = latest_quote["session"]
         rsi_val = _compute_rsi(close, 14)
         macd_line, macd_signal, macd_hist = _compute_macd(close)
         bb_upper, bb_lower = _compute_bb(close)
@@ -155,6 +157,10 @@ def compute_technical_indicators(
             "ticker": ticker,
             "price": current_price,
             "price_session": price_session,
+            "price_source": latest_quote["source"],
+            "price_quote_time": latest_quote["quote_time"],
+            "price_market_state": latest_quote["market_state"],
+            "price_stale": latest_quote["stale"],
             "rsi_14": rsi_val,
             "macd_line": macd_line,
             "macd_signal": macd_signal,

@@ -8,7 +8,7 @@ import requests
 
 from utils.constants import STOCK_UNIVERSE, SEC_HEADERS, DATA_DIR
 from utils.cache import cache
-from utils.price_utils import get_latest_price
+from utils.price_utils import get_latest_price, get_latest_quote
 from agents.auto_upgrader import agent_state
 from agents.sec_analyzer import ticker_to_cik
 try:
@@ -106,7 +106,9 @@ def fetch_stock_data(ticker: str, force_refresh: bool = False) -> Dict[str, Any]
             else:
                 rating_label = None
 
-            latest_price, price_session = get_latest_price(stock)
+            latest_quote = get_latest_quote(stock, fallback_close=info.get("price"), info=info)
+            latest_price = latest_quote["price"]
+            price_session = latest_quote["session"]
 
             result: Dict[str, Any] = {
                 "ticker": ticker,
@@ -114,6 +116,10 @@ def fetch_stock_data(ticker: str, force_refresh: bool = False) -> Dict[str, Any]
                 "data_source": "yfinance",
                 "price": latest_price,
                 "price_session": price_session,
+                "price_source": latest_quote["source"],
+                "price_quote_time": latest_quote["quote_time"],
+                "price_market_state": latest_quote["market_state"],
+                "price_stale": latest_quote["stale"],
                 "pe_ratio": info.get("trailingPE"),
                 "forward_pe": info.get("forwardPE"),
                 "market_cap": info.get("marketCap"),

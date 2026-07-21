@@ -69,6 +69,9 @@ def run_full_analysis(
         tech_score = tech.get("technical_score")
         stock["technical_score"] = tech_score
         stock["risk_metrics"] = tech.get("risk_metrics", {"available": False, "risk_level": "unknown"})
+        if tech.get("price") is not None:
+            for key in ("price", "price_session", "price_source", "price_quote_time", "price_market_state", "price_stale"):
+                stock[key] = tech.get(key)
         if tech_score is not None:
             stock["base_score"] = round(stock.get("growth_score", 0) * 0.7 + tech_score * 0.3, 1)
             stock["total_score"] = stock["base_score"]

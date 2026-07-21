@@ -762,8 +762,14 @@ def render_recommendations_tab() -> None:
                     price_label = f"${price_val:.2f}"
                     st.metric(t("metric.price", lang), price_label)
                     badge = ""
-                    if price_session and price_session != "Regular Trading Hours":
-                        badge = f"<span style='font-size:0.7rem;color:#86868b;'>({price_session})</span>"
+                    if price_session:
+                        stale_label = " · STALE" if rec.get("price_stale") else ""
+                        badge = f"<span style='font:600 .65rem var(--mono);color:var(--cyan);'>({html.escape(price_session)}{stale_label})</span>"
+                    quote_time = rec.get("price_quote_time")
+                    price_source = rec.get("price_source")
+                    if quote_time or price_source:
+                        quote_text = " · ".join(value for value in [price_source, quote_time] if value)
+                        badge += f" <span style='font:500 .61rem var(--mono);color:var(--muted);'>{html.escape(quote_text)}</span>"
                     fetched = rec.get("data_quality", {}).get("fetched_at") or rec.get("fetched_at")
                     if fetched:
                         from datetime import datetime as _dt

@@ -13,7 +13,8 @@ load_dotenv()
 
 _API_KEY: Optional[str] = os.getenv("LLM_API_KEY")
 _BASE_URL: Optional[str] = os.getenv("LLM_BASE_URL")
-_MODEL: Optional[str] = os.getenv("LLM_MODEL", "deepseek-chat")
+_CHAT_MODEL: str = os.getenv("LLM_MODEL", "deepseek-chat")
+_REASONING_MODEL: str = os.getenv("LLM_REASONING_MODEL", "deepseek-reasoner")
 
 _CLIENT: Optional[OpenAI] = None
 
@@ -24,12 +25,37 @@ def _get_client() -> Optional[OpenAI]:
         return _CLIENT
     if not _API_KEY or not _BASE_URL:
         return None
-    _CLIENT = OpenAI(api_key=_API_KEY, base_url=_BASE_URL)
+    _CLIENT = OpenAI(api_key=_API_KEY, base_url=_BASE_URL, timeout=45.0, max_retries=2)
     return _CLIENT
 
 
 def is_available() -> bool:
     return _get_client() is not None
+
+
+def get_model_for_task(task: str) -> str:
+    """Keep high-volume structured tasks on chat; reserve reasoning for deep strategy work."""
+    return _REASONING_MODEL if task == "strategy" else _CHAT_MODEL
+
+
+def get_public_config() -> Dict[str, Any]:
+    return {
+        "configured": bool(_API_KEY and _BASE_URL),
+        "provider": "openai-compatible",
+        "base_url": _BASE_URL,
+        "chat_model": _CHAT_MODEL,
+        "reasoning_model": _REASONING_MODEL,
+    }
+
+
+def _create_completion(client: OpenAI, task: str, **kwargs: Any) -> Any:
+    primary_model = get_model_for_task(task)
+    try:
+        return client.chat.completions.create(model=primary_model, **kwargs)
+    except Exception:
+        if primary_model == _CHAT_MODEL:
+            raise
+        return client.chat.completions.create(model=_CHAT_MODEL, **kwargs)
 
 
 _SYSTEM_PROMPT = """You are a professional equity analyst. Given fundamental data and technical indicators for a stock, rate it from 0-100 and provide concise analysis.
@@ -117,8 +143,9 @@ def analyze_stock(
         data_block += "\nNote: Limited price history available. Technical analysis may be unreliable.\n"
 
     try:
-        resp = client.chat.completions.create(
-            model=_MODEL,
+        resp = _create_completion(
+            client,
+            "stock_analysis",
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": f"Analyze this stock:\n\n{data_block}"},
@@ -269,8 +296,9 @@ def suggest_price_targets(
     data_block += _build_news_block(news_data)
 
     try:
-        resp = client.chat.completions.create(
-            model=_MODEL,
+        resp = _create_completion(
+            client,
+            "price_targets",
             messages=[
                 {"role": "system", "content": _PRICE_SYSTEM_PROMPT},
                 {"role": "user", "content": f"Suggest entry and exit prices for:\n\n{data_block}"},
@@ -310,8 +338,9 @@ def suggest_options_strategy(
         data_block += _build_news_block(news_data)
 
     try:
-        resp = client.chat.completions.create(
-            model=_MODEL,
+        resp = _create_completion(
+            client,
+            "options",
             messages=[
                 {"role": "system", "content": _OPTIONS_SYSTEM_PROMPT},
                 {"role": "user", "content": f"Suggest options strategy for:\n\n{data_block}"},
@@ -352,8 +381,9 @@ def check_llm_health() -> bool:
         if client is None:
             _llm_healthy = False
             return False
-        resp = client.chat.completions.create(
-            model=_MODEL,
+        resp = _create_completion(
+            client,
+            "health",
             messages=[{"role": "user", "content": "ping"}],
             max_tokens=1,
             temperature=0,
@@ -418,8 +448,9 @@ def suggest_trading_strategy(
         data_block += _build_news_block(news_data)
 
     try:
-        resp = client.chat.completions.create(
-            model=_MODEL,
+        resp = _create_completion(
+            client,
+            "strategy",
             messages=[
                 {"role": "system", "content": _STRATEGY_SYSTEM_PROMPT},
                 {"role": "user", "content": f"Recommend strategy for:\n\n{data_block}"},
@@ -474,8 +505,9 @@ def summarize_sec_filing(raw_text: str, ticker: str, lang: str = "zh_tw") -> Dic
             f"Language: {lang_name}\n\n"
             f"Filing excerpt:\n{truncated}"
         )
-        resp = client.chat.completions.create(
-            model=_MODEL,
+        resp = _create_completion(
+            client,
+            "sec_summary",
             messages=[
                 {"role": "system", "content": _SEC_SUMMARY_SYSTEM_PROMPT},
                 {"role": "user", "content": data_block},

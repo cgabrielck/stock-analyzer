@@ -287,7 +287,10 @@ LLM analysis is optional. Configure an OpenAI-compatible provider in `.env` loca
 LLM_API_KEY=your-api-key
 LLM_BASE_URL=https://api.example.com/v1
 LLM_MODEL=deepseek-chat
+LLM_REASONING_MODEL=deepseek-reasoner
 ```
+
+`deepseek-chat` handles batch scoring and structured JSON tasks. `deepseek-reasoner` is reserved for on-demand single-stock strategy analysis, where deeper reasoning is worth the additional latency and cost.
 
 Do not commit `.env` or API keys. The repository ignores `.env`, virtual environments, caches, portfolio state, and trade journals.
 

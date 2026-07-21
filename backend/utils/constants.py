@@ -104,8 +104,8 @@ SCORING_WEIGHTS: Dict[str, float] = {
 }
 
 CACHE_TTL: Dict[str, int] = {
-    "price": 3600,
-    "info": 86400,
+    "price": 300,
+    "info": 300,
     "financials": 86400,
     "sec_filings": 86400,
     "cik_map": 86400,

@@ -557,10 +557,12 @@ def build_sidebar() -> Dict[str, Any]:
     params["portfolio_capital"] = portfolio_capital
 
     st.sidebar.markdown("<hr style='margin:1.2rem 0;'>", unsafe_allow_html=True)
-    col1, col2 = st.sidebar.columns([1, 1])
+    col1, col2, col3 = st.sidebar.columns([1, 1, 1])
     with col1:
         params["run_clicked"] = st.button(t("sidebar.start", selected_lang), type="primary", use_container_width=True)
     with col2:
+        params["force_refresh"] = st.checkbox(t("sidebar.refresh", selected_lang), value=True, key="force_refresh_cb")
+    with col3:
         if st.button(t("sidebar.clear_cache", selected_lang), type="secondary", use_container_width=True):
             from utils.cache import cache
             cache_dir = os.path.join(os.path.dirname(__file__), "data", "cache")
@@ -611,6 +613,12 @@ def run_analysis(params: Dict[str, Any]) -> None:
 
     from agents.recommender import run_full_analysis
 
+    force_refresh = params.get("force_refresh", False)
+    if force_refresh:
+        from utils.cache import cache
+        for t in params.get("selected_tickers", []):
+            cache.delete(t, "info")
+
     results = run_full_analysis(
         progress_callback=update_progress,
         selected_tickers=params.get("selected_tickers"),
@@ -618,6 +626,7 @@ def run_analysis(params: Dict[str, Any]) -> None:
         filters=params.get("filters"),
         lang=lang,
         llm_weight=params.get("llm_weight", 0.2),
+        force_refresh=force_refresh,
     )
 
     progress_bar.empty()

@@ -64,6 +64,21 @@ class Cache:
             with open(path, "w") as f:
                 json.dump(store, f, indent=2)
 
+    def delete(self, key: str, category: str) -> None:
+        with self._lock:
+            mem_key = f"{category}:{key}"
+            self._mem_cache.pop(mem_key, None)
+            path = self._path(category)
+            if os.path.exists(path):
+                try:
+                    with open(path, "r") as f:
+                        store = json.load(f)
+                except (json.JSONDecodeError, OSError):
+                    return
+                store.pop(key, None)
+                with open(path, "w") as f:
+                    json.dump(store, f, indent=2)
+
     def clear_expired(self) -> None:
         with self._lock:
             from utils.constants import CACHE_TTL

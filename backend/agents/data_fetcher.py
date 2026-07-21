@@ -61,16 +61,17 @@ def _count_available_metrics(data: Dict[str, Any]) -> int:
     return sum(1 for k in SCORING_KEYS if data.get(k) is not None and data.get(k) != 0)
 
 
-def fetch_stock_data(ticker: str) -> Dict[str, Any]:
-    cached = cache.get(ticker, "info")
-    if cached:
-        cached["data_quality"] = {
-            "from_cache": True,
-            "fetched_at": cached.get("fetched_at", "unknown"),
-            "metrics_available": _count_available_metrics(cached),
-            "metrics_total": len(SCORING_KEYS),
-        }
-        return cached
+def fetch_stock_data(ticker: str, force_refresh: bool = False) -> Dict[str, Any]:
+    if not force_refresh:
+        cached = cache.get(ticker, "info")
+        if cached:
+            cached["data_quality"] = {
+                "from_cache": True,
+                "fetched_at": cached.get("fetched_at", "unknown"),
+                "metrics_available": _count_available_metrics(cached),
+                "metrics_total": len(SCORING_KEYS),
+            }
+            return cached
 
     last_error: Optional[str] = None
 
@@ -440,6 +441,7 @@ def _fetch_yahoo_fundamentals(ticker: str) -> Optional[Dict[str, Any]]:
 def fetch_all_stocks(
     selected_tickers: Optional[list[str]] = None,
     progress_callback: Optional[Callable[[int, int], None]] = None,
+    force_refresh: bool = False,
 ) -> Dict[str, Dict[str, Any]]:
     tickers = selected_tickers or [s["ticker"] for s in STOCK_UNIVERSE]
     results: Dict[str, Dict[str, Any]] = {}
@@ -447,7 +449,7 @@ def fetch_all_stocks(
     total = len(tickers)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        future_map = {executor.submit(fetch_stock_data, t): t for t in tickers}
+        future_map = {executor.submit(fetch_stock_data, t, force_refresh): t for t in tickers}
         for future in concurrent.futures.as_completed(future_map):
             ticker = future_map[future]
             try:

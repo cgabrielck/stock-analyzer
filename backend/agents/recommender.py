@@ -23,13 +23,14 @@ def run_full_analysis(
     filters: Optional[Dict[str, Any]] = None,
     lang: str = "zh_tw",
     llm_weight: float = 0.2,
+    force_refresh: bool = False,
 ) -> Dict[str, Any]:
     agent_state.log_upgrade("开始新一轮分析")
 
     cn_map = {s["ticker"]: s["name_cn"] for s in STOCK_UNIVERSE}
     sector_map = {s["ticker"]: s["sector"] for s in STOCK_UNIVERSE}
 
-    all_data = fetch_all_stocks(selected_tickers, progress_callback)
+    all_data = fetch_all_stocks(selected_tickers, progress_callback, force_refresh)
 
     scored = calculate_all_scores(all_data, custom_weights)
 

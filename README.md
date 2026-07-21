@@ -1,211 +1,331 @@
-# 📈 AI Stock Analyzer / AI 智能選股分析師
+# ALPHA//DESK — AI Stock Analyzer
 
-[![Streamlit App](https://img.shields.io/badge/Streamlit-FF4B4B?logo=streamlit&logoColor=white)](https://stock-analyzergit-ijue4vuwb7kuvizn62fema.streamlit.app/)
+[![Live App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://stock-analyzergit-ijue4vuwb7kuvizn62fema.streamlit.app/)
 [![Python](https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white)](https://python.org)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Tests](https://img.shields.io/badge/tests-67%20passing-22d3c5)](#testing--測試)
 
-> **AI-powered US stock screener** — fundamental scoring, portfolio management, backtesting, and LLM-assisted analysis.  
-> **AI 驅動的美股篩選器** — 基本面評分、投資組合管理、回測驗證、LLM 輔助分析。
+> A risk-aware US equity research terminal combining fundamental quality, technical signals, active-session prices, market-regime controls, walk-forward backtesting, portfolio sizing, and optional LLM analysis.
+>
+> 風險調整型美股研究終端，整合基本面、技術訊號、即時交易時段價格、市場狀態、walk-forward 回測、倉位管理與選用的 LLM 分析。
 
----
+**Live application / 線上版本:** [stock-analyzergit-ijue4vuwb7kuvizn62fema.streamlit.app](https://stock-analyzergit-ijue4vuwb7kuvizn62fema.streamlit.app/)
 
-## 🌟 Features / 功能特色
+## What It Does / 系統功能
 
-### 📊 Fundamental Scoring / 基本面評分
+- Screens a curated universe of **74 liquid US-listed equities** across 14 sectors.
+- Separates the universe into **69 Core** and **5 Satellite** stocks.
+- Produces up to five recommendations with sector and speculative-stock limits.
+- Selects the correct Yahoo quote for pre-market, regular, after-hours, overnight, or closed sessions.
+- Blends fundamental, technical, and optional LLM analysis.
+- Applies a transparent risk penalty before ranking stocks.
+- Detects the global SPY/VIX market regime and adjusts entry thresholds and portfolio exposure.
+- Simulates monthly rebalancing with turnover, cash, transaction costs, and no-look-ahead score calibration.
+- Builds a portfolio with capped position weights, stop losses, P&L, correlation alerts, and a local trade journal.
+- Provides English, Simplified Chinese, and Traditional Chinese interfaces.
 
-| Metric / 指標 | Weight / 權重 |
-|--------------|-------------|
-| Revenue Growth / 營收增長 | 25% |
-| EPS Growth / 每股盈餘增長 | 20% |
-| Profit Margin / 淨利潤率 | 10% |
-| PEG Ratio / PEG 比率 | 15% |
-| ROE / 股東權益報酬率 | 10% |
-| Debt-to-Equity / 負債權益比 | 5% |
+## Current Decision Logic / 目前決策邏輯
 
-### 🤖 LLM-Assisted Analysis / LLM 輔助分析
+### 1. Investable Universe / 可投資股票池
 
-- Quant (80%) + LLM sentiment (20%) blended scoring
-- 量化評分 80% + LLM 情緒評分 20% 混合加權
-- Adjustable LLM influence via sidebar slider
-- 可透過側邊欄滑桿調整 LLM 影響權重
+The built-in universe contains 74 stocks:
 
-### 📋 Portfolio Management / 投資組合管理
+| Constraint | Current rule |
+|---|---:|
+| Core stocks | 69 |
+| Satellite stocks | 5 |
+| Maximum recommendations | 5 |
+| Maximum per sector | 2 |
+| Maximum Satellite positions | 1 |
+| Minimum Satellite selection score | 65 |
 
-- Kelly Criterion position sizing (max 25% per position, 90% total)
-- 凱利公式倉位管理（單一部位上限 25%，總倉位上限 90%）
-- Trade journal with automated buy logging
-- 交易日記自動記錄買入
-- P&L tracking per position + portfolio level
-- 個股與組合層級損益追蹤
-- Correlation check (flags pairs with ρ ≥ 0.80)
-- 相關性檢查（標記 ρ ≥ 0.80 的配對）
-- Stop-loss management (beta-based, default 10%)
-- 止損管理（基於 Beta，預設 10%）
+Core stocks emphasize liquidity, operating history, and diversified sector exposure. Satellite stocks currently include higher-risk EV and space names. User-added custom tickers are treated conservatively as Satellite stocks.
 
-### 📈 Backtesting / 回測驗證
+內建股票池以大型、高流動性股票為核心，並保留少量高風險主題股票。自訂股票預設視為 Satellite，避免未知標的無限制進入投資組合。
 
-- Walk-forward validation across 5 years
-- 5 年滾動驗證
-- Monthly rebalancing simulation vs SPY benchmark
-- 每月再平衡模擬，對比 SPY 基準
+### 2. Fundamental Score / 基本面評分
 
-### 💹 Technical Analysis / 技術分析
+Available metrics are normalized to a 0–100 score. Missing metrics do not automatically become zero; the available weights are renormalized, while live recommendations require at least four usable metrics.
 
-- RSI, MACD, Bollinger Bands, SMA crossover signals
-- RSI、MACD、布林通道、SMA 交叉訊號
-- Used as tiebreaker for top candidates (top 15 by score)
-- 作為頂尖候選股（前 15 名）的輔助判斷
+| Metric | Relative weight |
+|---|---:|
+| Revenue growth | 25% |
+| EPS growth | 20% |
+| PEG ratio | 15% |
+| Profit margin | 10% |
+| ROE | 10% |
+| Debt-to-equity | 5% |
 
-### 🔍 Risk Metrics / 風險指標
+Yahoo `debtToEquity` is normalized from percentage points to a ratio before scoring. For example, Yahoo `150` becomes `1.5x`.
 
-- VaR 95%, Sharpe/Sortino Ratio, Max Drawdown, Beta, Volatility
-- VaR 95%、夏普/索提諾比率、最大回撤、Beta、波動率
+### 3. Technical Score / 技術評分
 
-### 🌐 Multi-Language UI / 多語言介面
+Technical analysis uses approximately six months of adjusted OHLCV data:
 
-- English / 简体中文 / 繁體中文
-- Sector names, risk labels, and analysis reports all localized
-- 行業名稱、風險標籤、分析報告皆已本地化
+- RSI(14)
+- MACD and signal histogram
+- SMA20 / SMA50 trend
+- Bollinger Bands
+- ATR(14)
+- 10-day versus 50-day volume ratio
 
-### 🗞️ News Sentiment / 新聞情緒分析
+When technical data is available:
 
-- Real-time news fetching via Sina Finance (fallback: Yahoo Finance)
-- 通過新浪財經即時獲取新聞（備援：Yahoo Finance）
-- Keyword-based sentiment classification
-- 基於關鍵字的情緒分類
-
----
-
-## 🏗 Architecture / 系統架構
-
+```text
+base_score = 70% fundamental_score + 30% technical_score
 ```
+
+### 4. Optional LLM Blend / 選用 LLM 混合評分
+
+The highest-ranked candidates can be analyzed by any OpenAI-compatible endpoint. The default influence is 20% and is adjustable in the sidebar.
+
+```text
+model_score = quant_score × (1 - llm_weight) + llm_score × llm_weight
+```
+
+The LLM is an assistant, not the primary decision engine. The app remains fully usable without an API key.
+
+### 5. Risk-Adjusted Selection / 風險調整選股
+
+Risk is calculated from the latest 126 valid adjusted prices, with at least 60 return observations required.
+
+| Risk tier | Trigger | Score penalty |
+|---|---|---:|
+| Low | Volatility <25% and drawdown <25% | 0 |
+| Medium | Volatility ≥25% or drawdown ≥25% | −5 |
+| High | Volatility ≥45% or drawdown ≥50% | −10 |
+
+```text
+risk_adjusted_score = model_score - risk_penalty
+```
+
+Selection, backtest calibration, and calibrated Kelly sizing use `risk_adjusted_score`. The original model score remains visible for auditability. Missing risk data is neutral and clearly labeled instead of silently rejecting the stock.
+
+Additional displayed risk metrics include:
+
+- Historical VaR 95%
+- Annualized volatility and return
+- Maximum drawdown
+- Sharpe and Sortino ratios
+- Beta versus SPY
+
+### 6. Global Market Regime / 全局市場狀態
+
+The regime engine uses one year of SPY and VIX data. SPY trend is classified with SMA50 and SMA200; VIX ≥25 overrides the trend as high volatility.
+
+| Regime | Entry threshold | Fill threshold | Target portfolio exposure |
+|---|---:|---:|---:|
+| Bull | 60 | 50 | 90% |
+| Neutral | 65 | 55 | 70% |
+| Bear | 72 | 65 | 40% |
+| High volatility | 75 | 68 | 40% |
+
+The same regime rules are applied in live recommendations and historical backtests. Defensive regimes raise the quality threshold and retain more cash rather than forcing five positions.
+
+### 7. Active-Session Price Selection / 即時交易時段價格
+
+Price selection follows Yahoo's current `marketState` rather than blindly preferring any populated quote field:
+
+| Yahoo state | Preferred price |
+|---|---|
+| `PRE` / `PREPRE` | Fresh pre-market quote |
+| `REGULAR` | Regular-market quote |
+| `POST` / `POSTPOST` | Fresh after-hours quote |
+| `CLOSED` | Newest completed-session quote, labeled closed |
+
+If the expected session quote is unavailable or stale, the app requests an explicit one-minute, extended-hours bar. It finally falls back to the regular close and marks the result `STALE`. The UI displays the session, quote source, quote timestamp, and freshness status.
+
+### 8. Portfolio Construction / 投資組合建構
+
+- Maximum position weight: 25%
+- Maximum exposure: regime-dependent, between 40% and 90%
+- Default fallback: equal weight with retained cash
+- Calibrated Kelly: enabled only when a valid walk-forward model exists
+- Calibration expiry: 180 days
+- Default stop loss: 10%, adjusted by Beta and capped at 25%
+- Correlation warning: positive correlation `ρ ≥ 0.80`
+
+The system no longer treats `score / 100` as a win probability. If a valid calibration model is unavailable, it safely uses capped equal weights.
+
+## Walk-Forward Backtesting / Walk-Forward 回測
+
+The backtest uses only information available at each monthly rebalance date:
+
+- Six-month technical warm-up before the requested start date
+- Adjusted stock and SPY prices
+- Quarterly fundamentals with a conservative 60-day filing lag
+- Monthly rebalancing
+- Shared live/backtest selection rules
+- Historical SPY/VIX regime classification
+- Equal-weight or expanding calibrated-Kelly sizing
+- Drift-aware turnover and configurable transaction costs
+- Cash retained according to regime exposure
+- Months with missing selected-stock exit prices are excluded instead of silently reallocating weights
+- Coverage diagnostics for prices, technicals, fundamentals, and exits
+
+Calibration uses completed stock-month outcomes only:
+
+```text
+At rebalance T:
+1. Add outcomes completed before T
+2. Fit/update score probability bins
+3. Score and size positions at T
+4. Queue T outcomes for the next rebalance
+```
+
+Calibration models are versioned and written atomically. A model is not allowed into live sizing when universe quality, technical coverage, sample size, or exit-price checks fail.
+
+### Important Backtest Limitation / 重要限制
+
+If `data/historical_universe.json` is absent, historical tests use today's universe and therefore contain survivorship bias. The UI displays this warning, and such a backtest is not permitted to generate a live sizing model.
+
+Yahoo generally exposes only limited quarterly history. Fundamental coverage may therefore be lower in early backtest periods. Coverage is displayed instead of being hidden.
+
+## Data Sources / 資料來源
+
+| Source | Primary use |
+|---|---|
+| Yahoo Finance / `yfinance` | Session quotes, adjusted OHLCV, fundamentals, benchmark, VIX, options, news |
+| Yahoo chart and quote-summary APIs | HTTP fallback pricing and fundamentals |
+| Sina Finance | Cloud fallback quotes and news |
+| East Money / AKShare | China-accessible fundamental fallback |
+| SEC EDGAR | Latest 10-K/10-Q filing context |
+| Local seed data | Offline fallback for the original universe subset |
+| OpenAI-compatible API | Optional LLM scoring and narrative analysis |
+
+Cached market information uses a five-minute TTL. Running analysis with force refresh bypasses application caches, but upstream providers may still be delayed.
+
+## Professional UI / 專業交易介面
+
+The Streamlit interface uses a custom dark institutional-terminal design:
+
+- Responsive desktop, tablet, and mobile layouts
+- Core/Satellite universe labels
+- Market-regime and target-exposure banner
+- Risk-adjusted recommendation cards
+- Model score, risk penalty, and selection-score breakdown
+- Dark Plotly technical and backtest charts
+- Portfolio risk overview, correlation alerts, stop-loss alerts, and trade journal
+- English, 简体中文, and 繁體中文 localization
+
+## Architecture / 系統架構
+
+```text
+stock-analyzer/
 ├── backend/
-│   ├── app.py                      # Streamlit Web UI
-│   ├── run_agent.py                # CLI mode / 命令列模式
-│   ├── i18n.py                     # Multi-language (en/zh_cn/zh_tw)
-│   │
+│   ├── app.py                         Streamlit terminal UI
+│   ├── run_agent.py                   CLI entry point
+│   ├── i18n.py                        en / zh_cn / zh_tw translations
 │   ├── agents/
-│   │   ├── data_fetcher.py         # Data fetching (yfinance → Sina/EM → seed fallback)
-│   │   ├── china_data_fetcher.py   # Chinese data sources (新浪 + 東方財富)
-│   │   ├── seed_data.py            # Offline seed data for 44 US stocks
-│   │   ├── fundamental_analyzer.py # Core scoring engine / 核心評分引擎
-│   │   ├── recommender.py          # Analysis orchestrator / 分析編排
-│   │   ├── sec_analyzer.py         # SEC EDGAR 10-K/10-Q analysis
-│   │   ├── technical_analyzer.py   # RSI, MACD, BB, SMA
-│   │   ├── portfolio_manager.py    # Kelly sizing, P&L tracking
-│   │   ├── llm_agent.py            # OpenAI/LLM integration
-│   │   ├── auto_upgrader.py        # Self-diagnosis & upgrade logging
-│   │   └── trading_strategies.py   # Strategy backtesting engine
-│   │
+│   │   ├── data_fetcher.py            Provider fallback orchestration
+│   │   ├── technical_analyzer.py      Technical indicators + price risk
+│   │   ├── fundamental_analyzer.py    Fundamental scoring
+│   │   ├── risk_analyzer.py           Risk metrics + score modifier
+│   │   ├── market_regime.py           SPY/VIX regime engine
+│   │   ├── recommender.py             End-to-end recommendation pipeline
+│   │   ├── portfolio_manager.py       Weights, stops, P&L, correlations
+│   │   ├── llm_agent.py               OpenAI-compatible LLM integration
+│   │   ├── sec_analyzer.py            SEC filing context
+│   │   ├── trading_strategies.py      Per-stock strategy analysis
+│   │   └── china_data_fetcher.py      Sina / East Money fallbacks
 │   ├── backtesting/
-│   │   └── engine.py               # Walk-forward backtesting
-│   │
-│   ├── utils/
-│   │   ├── constants.py            # Config (stock pool, weights)
-│   │   ├── cache.py                # Memory + disk cache
-│   │   └── price_utils.py          # Price helpers
-│   │
-│   └── data/                       # Cached data, trade journal, portfolio state
-│
-├── requirements.txt
-└── runtime.txt                     # Python 3.12 for Streamlit Cloud
+│   │   ├── engine.py                  Monthly walk-forward simulator
+│   │   ├── calibration.py             Expanding score calibration
+│   │   └── universe.py                Dated universe snapshots
+│   └── utils/
+│       ├── constants.py               Universe, sectors, score weights
+│       ├── selection.py               Shared constrained selector
+│       ├── price_utils.py             Session-aware quote selection
+│       └── cache.py                   Thread-safe memory/disk cache
+├── tests/                              Unit and regression tests
+├── .streamlit/config.toml              Production dark theme
+├── pytest.ini                          Test path configuration
+├── requirements.txt                    Python dependencies
+└── runtime.txt                         Streamlit Cloud Python version
 ```
 
----
+## Tech Stack / 技術棧
 
-## 🚀 Quick Start / 快速開始
+- **Python 3.12**
+- **Streamlit** for the web application
+- **Pandas** and **NumPy** for time-series and quantitative calculations
+- **yfinance** for Yahoo market and fundamental data
+- **AKShare**, **Requests**, and **BeautifulSoup4** for fallback data and parsing
+- **Plotly** and **Altair** for interactive visualization
+- **OpenAI Python SDK** for optional OpenAI-compatible LLM providers
+- **pytest** for regression testing
+- Thread pools for bounded parallel quote, technical, and backtest data retrieval
+- JSON-based local persistence for cache, portfolio state, trade journal, and calibration models
+
+## Quick Start / 快速開始
+
+Python 3.12 is recommended.
 
 ```bash
-# Clone / 克隆
 git clone https://github.com/cgabrielck/stock-analyzer.git
 cd stock-analyzer
 
-# Install / 安裝依賴
+python3.12 -m venv .venv312
+source .venv312/bin/activate
 pip install -r requirements.txt
 
-# Launch Web UI / 啟動網頁介面
 streamlit run backend/app.py
-
-# Or CLI mode / 或命令列模式
-python backend/run_agent.py
 ```
 
-### Environment Variables / 環境變數 (optional)
+Open [http://localhost:8501](http://localhost:8501).
+
+CLI mode:
+
+```bash
+PYTHONPATH=backend python backend/run_agent.py
+```
+
+## LLM Configuration / LLM 設定
+
+LLM analysis is optional. Configure an OpenAI-compatible provider in `.env` locally or Streamlit Secrets in cloud deployment:
 
 ```env
-OPENAI_API_KEY=sk-...   # Enables LLM analysis / 啟用 LLM 分析
+LLM_API_KEY=your-api-key
+LLM_BASE_URL=https://api.example.com/v1
+LLM_MODEL=deepseek-chat
 ```
 
----
+Do not commit `.env` or API keys. The repository ignores `.env`, virtual environments, caches, portfolio state, and trade journals.
 
-## 🔌 Data Sources / 數據來源
+## Testing / 測試
 
-The system uses a **fallback chain** to ensure data availability everywhere:
-
-```
-yfinance (local) → Sina Finance + East Money (cloud) → Seed Data (offline)
+```bash
+./.venv312/bin/pytest -q
 ```
 
-| Source / 來源 | Purpose / 用途 | Cloud / 雲端 |
-|-------------|--------------|------------|
-| **Yahoo Finance** (yfinance) | Real-time price, financials, options, ESG | ❌ Blocked |
-| **Sina Finance / 新浪財經** | Real-time quote, PE, market cap (HTTP API) | ✅ Works |
-| **East Money / 東方財富** (AKShare) | Revenue, EPS, ROE, debt/equity financials | ✅ Works |
-| **Seed Data / 種子數據** | Offline fallback for all 44 stocks | ✅ Always |
+Current verified result:
 
-44 US stocks across 10 sectors: Semiconductors, Technology, Healthcare, Financial, Consumer, Industrials, Energy, Space, Memory & Storage, Defense & Aerospace.
+```text
+67 passed
+```
 
----
+Additional checks:
 
-## ☁️ Deploy to Streamlit Cloud / 部署到 Streamlit Cloud
+```bash
+./.venv312/bin/python -m compileall -q backend tests
+git diff --check
+```
 
-1. Push to GitHub
-2. Connect repo at [share.streamlit.io](https://share.streamlit.io)
-3. Set main file: `backend/app.py`
-4. Add `OPENAI_API_KEY` in Secrets if desired
+## Streamlit Cloud Deployment / 雲端部署
 
-The app auto-deploys on every push to `main`.
+1. Push the repository to GitHub.
+2. Connect it at [share.streamlit.io](https://share.streamlit.io).
+3. Set the entry point to `backend/app.py`.
+4. Add optional LLM variables under Streamlit Secrets.
+5. Set app visibility as required.
 
----
+Every push to `main` triggers a Streamlit Cloud redeploy.
 
-## 📸 Screenshots / 介面截圖
+## Privacy and Persistence / 隱私與持久化
 
-| Tab / 分頁 | Description / 說明 |
-|-----------|------------------|
-| 📋 **Stock Pool** | Browse 44 stocks by sector |
-| 📊 **Backtest** | 5-year walk-forward validation vs SPY |
-| 💼 **Portfolio** | Kelly-sized positions, P&L, trade journal |
-| 🏆 **Recommend** | Top 5 picks with detailed reasoning |
-| 📊 **Rankings** | Full 44-stock ranking table |
-| 🔍 **Compare** | Side-by-side stock comparison |
-| 📐 **Valuation** | P/E, P/S, P/B, EV/EBITDA charts |
-| 📈 **Charts** | Price history with technical overlays |
-| 📰 **News** | Per-stock news with sentiment |
-| 🏭 **Industry News** | Sector-level news aggregation |
-| 🤖 **AI** | Agent logs, cache status, LLM settings |
+`data/portfolio_state.json` and `data/trade_journal.json` are local runtime files and are intentionally excluded from Git. On ephemeral cloud hosting, local file changes may be lost after a restart or redeploy. Use an external database before relying on the journal as a permanent multi-user ledger.
 
----
+## Disclaimer / 免責聲明
 
-## 🧪 Tech Stack / 技術棧
+This project is for educational and research purposes only. It does not provide financial advice, brokerage execution, or any guarantee of future performance. Market data can be delayed or incomplete. Always verify prices with your broker and perform independent due diligence before trading.
 
-- **Python** 3.12+ (3.14 locally, 3.12 on cloud via `runtime.txt`)
-- **Streamlit** — Web UI framework
-- **yfinance** / **AKShare** — Market data
-- **Pandas**, **NumPy** — Data processing
-- **Plotly**, **Altair** — Charts & visualization
-- **OpenAI API** — LLM analysis (optional)
-- **BeautifulSoup4**, **Requests** — Web scraping
-
----
-
-## ⚠️ Disclaimer / 免責聲明
-
-**English:** This tool is for **educational and research purposes only**. It does not constitute financial advice. Past performance does not guarantee future results. Always do your own research before investing.
-
-**繁體中文：** 本工具僅供 **教育與研究用途**，不構成任何投資建議。過往表現不代表未來成果。投資有風險，入市前請自行研究評估。
-
----
-
-## 📄 License / 授權
-
-MIT License — see [LICENSE](LICENSE) file.
+本專案僅供教育與研究用途，不構成投資建議、交易執行服務或任何收益保證。市場資料可能延遲或不完整，下單前請以券商資料為準並自行研究風險。

@@ -616,8 +616,8 @@ def run_analysis(params: Dict[str, Any]) -> None:
     force_refresh = params.get("force_refresh", False)
     if force_refresh:
         from utils.cache import cache
-        for t in params.get("selected_tickers", []):
-            cache.delete(t, "info")
+        for tk in params.get("selected_tickers", []):
+            cache.delete(tk, "info")
 
     results = run_full_analysis(
         progress_callback=update_progress,

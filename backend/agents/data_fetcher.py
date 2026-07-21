@@ -51,7 +51,8 @@ import time as _time
 
 
 def _now_str() -> str:
-    return _time.strftime("%Y-%m-%d %H:%M:%S")
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 SCORING_KEYS: list[str] = ["revenue_growth", "eps_growth", "profit_margin", "peg", "roe", "debt_equity"]

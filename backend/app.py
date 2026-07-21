@@ -1012,7 +1012,15 @@ def render_recommendations_tab() -> None:
             dq = rec.get("data_quality", {})
             fetched = dq.get("fetched_at", rec.get("fetched_at"))
             if fetched:
-                st.caption(t("recommend.fetched_at", lang, time=fetched))
+                try:
+                    from datetime import datetime, timezone, timedelta
+                    ft_str = str(fetched)[:19]
+                    utc_time = datetime.strptime(ft_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                    hk_time = utc_time.astimezone(timezone(timedelta(hours=8)))
+                    fetched = hk_time.strftime("%Y-%m-%d %H:%M:%S HKT")
+                except Exception:
+                    pass
+            st.caption(t("recommend.fetched_at", lang, time=fetched))
             avail = dq.get("metrics_available", 0)
             total_m = dq.get("metrics_total", 6)
             ratio = avail / total_m if total_m > 0 else 0

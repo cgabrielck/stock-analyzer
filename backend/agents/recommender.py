@@ -6,7 +6,7 @@ from agents.sec_analyzer import get_latest_filing
 from agents.auto_upgrader import agent_state
 from agents.technical_analyzer import compute_all_technical
 from agents.llm_agent import analyze_stocks_batch, is_available as llm_available
-from agents.risk_analyzer import fetch_risk_metrics
+from agents.risk_analyzer import calculate_risk_adjusted_score, fetch_risk_metrics
 from agents.market_regime import detect_global_market_regime
 from utils.constants import SECTOR_CN_MAP, STOCK_UNIVERSE
 from utils.selection import select_recommendations
@@ -68,6 +68,7 @@ def run_full_analysis(
         tech = tech_data.get(stock["ticker"], {})
         tech_score = tech.get("technical_score")
         stock["technical_score"] = tech_score
+        stock["risk_metrics"] = tech.get("risk_metrics", {"available": False, "risk_level": "unknown"})
         if tech_score is not None:
             stock["base_score"] = round(stock.get("growth_score", 0) * 0.7 + tech_score * 0.3, 1)
             stock["total_score"] = stock["base_score"]
@@ -82,9 +83,12 @@ def run_full_analysis(
         rest = [s for s in scored if s["ticker"] not in llm_tickers]
         scored = scored_with_llm + rest
 
-    # Technical and LLM analysis change total_score, so restore global rank order
-    # before applying thresholds and diversification constraints.
-    scored.sort(key=lambda stock: stock.get("total_score", 0) or 0, reverse=True)
+    for stock in scored:
+        stock.update(calculate_risk_adjusted_score(
+            stock.get("total_score", 0) or 0,
+            stock.get("risk_metrics", {}),
+        ))
+    scored.sort(key=lambda stock: stock.get("risk_adjusted_score", 0) or 0, reverse=True)
     market_regime = detect_global_market_regime(force_refresh=force_refresh)
     picks = select_recommendations(
         scored,
@@ -95,6 +99,7 @@ def run_full_analysis(
         min_metrics=MIN_RECOMMENDATION_METRICS,
         max_satellite=1,
         satellite_threshold=65.0,
+        score_field="risk_adjusted_score",
     )
 
     recommendations: List[Dict[str, Any]] = []
@@ -112,10 +117,12 @@ def run_full_analysis(
 
         recommendations.append(rec)
 
-    if recommendations:
-        risk_by_ticker = fetch_risk_metrics([rec["ticker"] for rec in recommendations])
+    missing_risk = [rec["ticker"] for rec in recommendations if not rec.get("risk_metrics", {}).get("available")]
+    if missing_risk:
+        risk_by_ticker = fetch_risk_metrics(missing_risk)
         for rec in recommendations:
-            rec["risk_metrics"] = risk_by_ticker.get(rec["ticker"], {"available": False, "risk_level": "unknown"})
+            if rec["ticker"] in risk_by_ticker:
+                rec["risk_metrics"] = risk_by_ticker[rec["ticker"]]
 
     if recommendations:
         agent_state.log_recommendation(recommendations)
@@ -131,6 +138,10 @@ def run_full_analysis(
             "行业": SECTOR_CN_MAP.get(s.get("sector"), s.get("sector", "未知")),
             "价格": s.get("price"),
             "成长评分": s.get("growth_score", 0),
+            "模型评分": s.get("total_score", 0),
+            "风险扣分": s.get("risk_penalty", 0),
+            "风险调整评分": s.get("risk_adjusted_score", s.get("total_score", 0)),
+            "风险等级": s.get("risk_metrics", {}).get("risk_level", "unknown"),
             "营收增长": s.get("revenue_growth"),
             "EPS增长": s.get("eps_growth"),
             "净利润率": s.get("profit_margin"),

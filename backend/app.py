@@ -705,7 +705,7 @@ def render_recommendations_tab() -> None:
     cols = st.columns(len(recs))
     for i, (col, rec) in enumerate(zip(cols, recs)):
         with col:
-            score = rec.get("total_score", 0)
+            score = rec.get("risk_adjusted_score", rec.get("total_score", 0))
             price = rec.get("price")
             price_str = f"${price:.2f}" if price else "$N/A"
             sec_name = _sector_name(rec.get("sector", ""), lang)
@@ -795,6 +795,14 @@ def render_recommendations_tab() -> None:
                 market_cap = rec.get("market_cap")
                 cap_str = f"${market_cap/1e9:.2f}B" if market_cap and market_cap >= 1e9 else f"${market_cap/1e6:.2f}M" if market_cap else "N/A"
                 st.metric(t("metric.mcap", lang), cap_str)
+
+            score_cols = st.columns(3)
+            with score_cols[0]:
+                st.metric(t("risk.model_score", lang), f"{rec.get('total_score', 0):.1f}")
+            with score_cols[1]:
+                st.metric(t("risk.penalty", lang), f"-{rec.get('risk_penalty', 0):.0f}")
+            with score_cols[2]:
+                st.metric(t("risk.selection_score", lang), f"{rec.get('risk_adjusted_score', rec.get('total_score', 0)):.1f}")
 
             # Relative strength
             try:
@@ -1889,6 +1897,8 @@ def render_portfolio_tab() -> None:
         pos_rows.append({
             "Ticker": p["ticker"],
             t("portfolio.score", lang): p["total_score"],
+            t("risk.selection_score", lang): p.get("risk_adjusted_score", p["total_score"]),
+            t("risk.penalty", lang): f"-{p.get('risk_penalty', 0):.0f}",
             t("portfolio.weight", lang): f"{p['weight']*100:.1f}%",
             t("portfolio.shares", lang): p["shares"],
             t("portfolio.entry_price", lang): f"${p['entry_price']:.2f}",

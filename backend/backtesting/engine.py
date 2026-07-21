@@ -38,6 +38,7 @@ from agents.portfolio_manager import (
     normalize_capped_weights,
 )
 from agents.market_regime import classify_market_regime
+from agents.risk_analyzer import calculate_risk_adjusted_score, calculate_risk_metrics, risk_label
 from backtesting.calibration import ExpandingScoreCalibrator, save_calibration_snapshot
 from backtesting.universe import HistoricalUniverse
 from utils.cache import cache
@@ -492,9 +493,13 @@ def run_backtest(
                 "sma_50": tech.get("sma_50"),
                 "trend_signal": tech.get("trend_signal"),
             }
+            risk_metrics = calculate_risk_metrics(hist["Close"])
+            risk_metrics["risk_level"] = risk_label(risk_metrics)
+            entry["risk_metrics"] = risk_metrics
+            entry.update(calculate_risk_adjusted_score(score, risk_metrics))
             scored.append(entry)
 
-        scored.sort(key=lambda x: x.get("total_score", 0) or 0, reverse=True)
+        scored.sort(key=lambda x: x.get("risk_adjusted_score", 0) or 0, reverse=True)
         spy_history = price_data["SPY"][price_data["SPY"].index <= reb_date_tz]["Close"]
         vix_df = price_data.get("^VIX")
         vix_history = vix_df[vix_df.index <= reb_date_tz]["Close"] if vix_df is not None else None
@@ -507,6 +512,7 @@ def run_backtest(
             top_n=TOP_N,
             max_satellite=1,
             satellite_threshold=65.0,
+            score_field="risk_adjusted_score",
         )
         technical_coverage.append(technical_count / len(period_universe) if period_universe else 0.0)
         fundamental_coverage.append(fundamental_count / technical_count if technical_count else 0.0)
@@ -526,7 +532,7 @@ def run_backtest(
             exit_price = float(exit_slice["Close"].iloc[-1])
             all_forward_returns[ticker] = exit_price / entry_price - 1
         pending_observations = [
-            (stock["total_score"], all_forward_returns[stock["ticker"]] > 0)
+            (stock["risk_adjusted_score"], all_forward_returns[stock["ticker"]] > 0)
             for stock in scored if stock["ticker"] in all_forward_returns
         ]
         forward_returns = {
@@ -584,6 +590,10 @@ def run_backtest(
             "date": reb_date,
             "picks": [p["ticker"] for p in picks],
             "avg_score": round(sum(p.get("total_score", 0) for p in picks) / len(picks), 1) if picks else 0,
+            "avg_model_score": round(sum(p.get("total_score", 0) for p in picks) / len(picks), 1) if picks else 0,
+            "avg_risk_adjusted_score": round(sum(p.get("risk_adjusted_score", 0) for p in picks) / len(picks), 1) if picks else 0,
+            "avg_risk_penalty": round(sum(p.get("risk_penalty", 0) for p in picks) / len(picks), 1) if picks else 0,
+            "risk_available_count": sum(bool(p.get("risk_metrics", {}).get("available")) for p in picks),
             "avg_tech_score": round(sum(p.get("tech_score", 0) for p in picks) / len(picks), 1) if picks else 0,
             "avg_fund_score": round(sum(fund_scores) / len(fund_scores), 1) if fund_scores else None,
             "num_picks": len(picks),
@@ -684,7 +694,9 @@ def _target_weights(
         return {}, False
     if weighting == "calibrated_kelly":
         probabilities = {
-            pick["ticker"]: calibrator.probability(pick.get("total_score", 0) or 0)
+            pick["ticker"]: calibrator.probability(
+                pick.get("risk_adjusted_score", pick.get("total_score", 0)) or 0
+            )
             for pick in picks
         }
         if all(probability is not None for probability in probabilities.values()):

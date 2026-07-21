@@ -6,7 +6,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
-from agents.risk_analyzer import calculate_risk_metrics, risk_label
+from agents.risk_analyzer import calculate_risk_adjusted_score, calculate_risk_metrics, risk_label
 
 
 def test_calculate_risk_metrics_on_sufficient_price_history() -> None:
@@ -35,3 +35,29 @@ def test_risk_metrics_reject_short_history() -> None:
 
 def test_risk_label_marks_volatile_stock_high_risk() -> None:
     assert risk_label({"available": True, "annual_volatility_pct": 50, "max_drawdown_pct": -20, "beta": 1}) == "high"
+
+
+def test_risk_adjusted_score_penalty_boundaries() -> None:
+    low = calculate_risk_adjusted_score(80, {"available": True, "annual_volatility_pct": 24.9, "max_drawdown_pct": -24.9})
+    medium = calculate_risk_adjusted_score(80, {"available": True, "annual_volatility_pct": 25, "max_drawdown_pct": -10})
+    high = calculate_risk_adjusted_score(80, {"available": True, "annual_volatility_pct": 45, "max_drawdown_pct": -50})
+
+    assert low["risk_adjusted_score"] == 80
+    assert medium["risk_adjusted_score"] == 75
+    assert high["risk_adjusted_score"] == 70
+    assert high["risk_penalty"] == 10
+
+
+def test_missing_risk_is_neutral_and_score_is_clamped() -> None:
+    assert calculate_risk_adjusted_score(120, {"available": False}) == {
+        "risk_adjusted_score": 100.0,
+        "risk_penalty": 0.0,
+        "risk_penalty_level": "unknown",
+    }
+
+
+def test_risk_metrics_use_fixed_latest_window() -> None:
+    base = pd.Series(np.linspace(50, 100, 126))
+    prefixed = pd.concat([pd.Series([1000.0, 10.0]), base], ignore_index=True)
+
+    assert calculate_risk_metrics(base) == calculate_risk_metrics(prefixed)

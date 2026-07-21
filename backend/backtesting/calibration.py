@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 
-MODEL_VERSION = 1
+MODEL_VERSION = 2
 DEFAULT_MODEL_PATH = Path(__file__).resolve().parents[2] / "data" / "score_calibration.json"
 
 

@@ -7,6 +7,7 @@ import pandas as pd
 
 TRADING_DAYS = 252
 MIN_RETURN_OBSERVATIONS = 60
+RISK_LOOKBACK_PRICES = 126
 
 
 def calculate_risk_metrics(
@@ -15,7 +16,11 @@ def calculate_risk_metrics(
     risk_free_rate: float = 0.0,
 ) -> Dict[str, Any]:
     """Calculate annualized risk statistics without fetching external data."""
-    clean_prices = pd.to_numeric(prices, errors="coerce").dropna()
+    clean_prices = pd.to_numeric(prices, errors="coerce")
+    clean_prices = clean_prices[np.isfinite(clean_prices) & (clean_prices > 0)]
+    if clean_prices.index.has_duplicates:
+        clean_prices = clean_prices[~clean_prices.index.duplicated(keep="last")]
+    clean_prices = clean_prices.sort_index().tail(RISK_LOOKBACK_PRICES)
     returns = clean_prices.pct_change().dropna()
     if len(returns) < MIN_RETURN_OBSERVATIONS:
         return {"available": False, "observations": len(returns), "reason": "insufficient_history"}
@@ -45,10 +50,10 @@ def calculate_risk_metrics(
     return {
         "available": True,
         "observations": len(returns),
-        "annual_return_pct": round(annual_return * 100, 2),
-        "annual_volatility_pct": round(annual_volatility * 100, 2),
-        "var_95_daily_pct": round(var_95 * 100, 2),
-        "max_drawdown_pct": round(max_drawdown * 100, 2),
+        "annual_return_pct": round(float(annual_return * 100), 2),
+        "annual_volatility_pct": round(float(annual_volatility * 100), 2),
+        "var_95_daily_pct": round(float(var_95 * 100), 2),
+        "max_drawdown_pct": round(float(max_drawdown * 100), 2),
         "sharpe_ratio": round(sharpe, 2) if sharpe is not None else None,
         "sortino_ratio": round(sortino, 2) if sortino is not None else None,
         "beta": round(beta, 2) if beta is not None else None,
@@ -66,6 +71,30 @@ def risk_label(metrics: Dict[str, Any]) -> str:
     if volatility >= 25 or drawdown >= 25 or beta >= 1.2:
         return "medium"
     return "low"
+
+
+def calculate_risk_adjusted_score(total_score: float, metrics: Dict[str, Any]) -> Dict[str, Any]:
+    score = max(0.0, min(100.0, float(total_score or 0)))
+    if not metrics.get("available"):
+        return {
+            "risk_adjusted_score": round(score, 1),
+            "risk_penalty": 0.0,
+            "risk_penalty_level": "unknown",
+        }
+
+    volatility = abs(float(metrics.get("annual_volatility_pct") or 0))
+    drawdown = abs(float(metrics.get("max_drawdown_pct") or 0))
+    if volatility >= 45 or drawdown >= 50:
+        penalty, level = 10.0, "high"
+    elif volatility >= 25 or drawdown >= 25:
+        penalty, level = 5.0, "medium"
+    else:
+        penalty, level = 0.0, "low"
+    return {
+        "risk_adjusted_score": round(max(0.0, score - penalty), 1),
+        "risk_penalty": penalty,
+        "risk_penalty_level": level,
+    }
 
 
 def fetch_risk_metrics(tickers: Iterable[str], period: str = "1y") -> Dict[str, Dict[str, Any]]:

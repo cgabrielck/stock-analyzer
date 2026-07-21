@@ -83,7 +83,7 @@ def calculate_portfolio_weights(
     snapshot = calibration if calibration is not None else load_calibration_snapshot()
     probabilities = {
         recommendation["ticker"]: probability_from_snapshot(
-            recommendation.get("total_score", 0) or 0,
+            recommendation.get("risk_adjusted_score", recommendation.get("total_score", 0)) or 0,
             snapshot,
         ) if snapshot else None
         for recommendation in recommendations
@@ -235,6 +235,8 @@ def build_portfolio(
             "stop_loss": stop_loss,
             "target_price": target,
             "total_score": r.get("total_score", 0),
+            "risk_adjusted_score": r.get("risk_adjusted_score", r.get("total_score", 0)),
+            "risk_penalty": r.get("risk_penalty", 0),
             "pnl": round(pnl, 2),
             "pnl_pct": round(pnl_pct, 2),
             "stop_hit": price <= stop_loss,

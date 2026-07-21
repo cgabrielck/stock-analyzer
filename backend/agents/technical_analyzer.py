@@ -8,6 +8,7 @@ import numpy as np
 
 from utils.cache import cache
 from utils.price_utils import get_latest_price
+from agents.risk_analyzer import calculate_risk_metrics, risk_label
 from agents.auto_upgrader import agent_state
 
 
@@ -166,6 +167,9 @@ def compute_technical_indicators(
             "volume_ratio_10_50": volume_ratio,
             "price_vs_sma50_pct": price_vs_sma50,
         }
+        risk_metrics = calculate_risk_metrics(close)
+        risk_metrics["risk_level"] = risk_label(risk_metrics)
+        result["risk_metrics"] = risk_metrics
 
         _enrich_interpretation(result)
         result["technical_score"] = calculate_technical_score(result)

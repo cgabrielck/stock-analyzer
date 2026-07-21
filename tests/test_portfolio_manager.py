@@ -42,7 +42,7 @@ def test_portfolio_weights_use_equal_allocation_without_calibration() -> None:
 
 def test_portfolio_weights_use_ready_calibration() -> None:
     calibration = {
-        "model_version": 1,
+        "model_version": 2,
         "ready": True,
         "observations": 100,
         "min_observations": 100,

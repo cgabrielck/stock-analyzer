@@ -136,26 +136,26 @@ def run_full_analysis(
     all_rankings: List[Dict[str, Any]] = []
     for s in scored:
         entry = {
-            "排名": len(all_rankings) + 1,
-            "代码": s["ticker"],
-            "名称": cn_map.get(s["ticker"], s.get("longName", s["ticker"])),
-            "行业": SECTOR_CN_MAP.get(s.get("sector"), s.get("sector", "未知")),
-            "价格": s.get("price"),
-            "成长评分": s.get("growth_score", 0),
-            "模型评分": s.get("total_score", 0),
-            "风险扣分": s.get("risk_penalty", 0),
-            "风险调整评分": s.get("risk_adjusted_score", s.get("total_score", 0)),
-            "风险等级": s.get("risk_metrics", {}).get("risk_level", "unknown"),
-            "营收增长": s.get("revenue_growth"),
-            "EPS增长": s.get("eps_growth"),
-            "净利润率": s.get("profit_margin"),
-            "PEG": s.get("peg"),
-            "ROE": s.get("roe"),
-            "负债/权益": s.get("debt_equity"),
+            "rank": len(all_rankings) + 1,
+            "ticker": s["ticker"],
+            "name": cn_map.get(s["ticker"], s.get("longName", s["ticker"])),
+            "sector": s.get("sector", "Unknown"),
+            "price": s.get("price"),
+            "growth_score": s.get("growth_score", 0),
+            "model_score": s.get("total_score", 0),
+            "risk_penalty": s.get("risk_penalty", 0),
+            "risk_adjusted_score": s.get("risk_adjusted_score", s.get("total_score", 0)),
+            "risk_level": s.get("risk_metrics", {}).get("risk_level", "unknown"),
+            "revenue_growth": s.get("revenue_growth"),
+            "eps_growth": s.get("eps_growth"),
+            "profit_margin": s.get("profit_margin"),
+            "peg": s.get("peg"),
+            "roe": s.get("roe"),
+            "debt_equity": s.get("debt_equity"),
         }
         if use_llm:
-            entry["LLM评分"] = s.get("llm_score")
-            entry["技术信号"] = s.get("llm_key_signal", "")
+            entry["llm_score"] = s.get("llm_score")
+            entry["technical_signal"] = s.get("llm_key_signal", "")
         all_rankings.append(entry)
 
     return {

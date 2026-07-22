@@ -103,7 +103,7 @@ def _inject_apple_css() -> None:
     h2 { font-size:1.25rem !important; }
     h3 { font-size:1rem !important; }
     p, label, .stMarkdown { color:var(--text); }
-    [data-testid="stCaptionContainer"], .stCaption { color:var(--muted) !important; font-size:.7rem; }
+    [data-testid="stCaptionContainer"], .stCaption { color:var(--muted) !important; font-size:.78rem; }
     hr { border:0; height:1px; background:var(--line); margin:1.1rem 0; }
 
     .stTabs [data-baseweb="tab-list"] { gap:.35rem; overflow-x:auto; scrollbar-width:none; border-bottom:1px solid var(--line); padding-bottom:.5rem; margin-bottom:1.2rem; }
@@ -126,7 +126,7 @@ def _inject_apple_css() -> None:
     .feature-card p { color:var(--muted); font-size:.76rem; margin:0; }
 
     div[data-testid="stMetric"] { background:linear-gradient(145deg,var(--panel-2),var(--panel)); border:1px solid var(--line); border-radius:8px; padding:.72rem .85rem; min-height:82px; }
-    div[data-testid="stMetric"] label { color:var(--muted) !important; font-family:var(--mono); font-size:.62rem !important; letter-spacing:.07em; text-transform:uppercase; }
+    div[data-testid="stMetric"] label { color:var(--muted) !important; font-family:var(--mono); font-size:.72rem !important; letter-spacing:.05em; text-transform:uppercase; }
     div[data-testid="stMetric"] [data-testid="stMetricValue"] { color:var(--text); font-family:var(--mono); font-size:1.12rem; font-weight:700; }
     div[data-testid="stMetricDelta"] { font-family:var(--mono); font-size:.66rem; }
 
@@ -183,6 +183,8 @@ def _inject_apple_css() -> None:
         .entry-card { min-height:0; }
         .entry-copy { min-height:0; }
         .proof-strip { grid-template-columns:repeat(2,1fr); }
+        div[data-testid="stHorizontalBlock"] { flex-wrap:wrap; }
+        div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] { min-width:calc(50% - .5rem) !important; flex:1 1 calc(50% - .5rem) !important; }
         .stTabs [data-baseweb="tab-list"] { position:sticky; top:0; z-index:20; background:rgba(7,11,18,.94); backdrop-filter:blur(12px); padding:.45rem 0; }
         .stTabs [data-baseweb="tab"] { font-size:.67rem; padding:.48rem .62rem; min-height:42px; }
         .stButton > button { min-height:44px; }
@@ -196,6 +198,7 @@ def _inject_apple_css() -> None:
         [data-testid="stSidebarCollapsedControl"] button svg { display:none !important; }
         section[data-testid="stSidebar"] { min-width:0; }
     }
+    @media (prefers-reduced-motion: reduce) { .live-dot { animation:none; } .rec-card { transition:none; } }
 </style>"""
     st.markdown(css, unsafe_allow_html=True)
 
@@ -218,6 +221,11 @@ def init_state() -> None:
         "picks_results": {},
         "picks_errors": {},
         "picks_selection_widget": [],
+        "picks_analyzed_tickers": [],
+        "picks_analyzed_at": None,
+        "picks_run_error": None,
+        "scan_view": "overview",
+        "scan_filter_tickers": [],
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -395,7 +403,7 @@ def build_sidebar() -> Dict[str, Any]:
     params["run_clicked"] = False
     col1, col2 = st.sidebar.columns(2)
     with col1:
-        params["force_refresh"] = st.checkbox(t("sidebar.refresh", selected_lang), value=True, key="force_refresh_cb")
+        params["force_refresh"] = st.checkbox(t("sidebar.refresh", selected_lang), value=False, key="force_refresh_cb")
     with col2:
         if st.button(t("sidebar.clear_cache", selected_lang), type="secondary", width="stretch"):
             from utils.cache import cache
@@ -454,19 +462,24 @@ def run_analysis(params: Dict[str, Any]) -> None:
             cache.delete(f"tech_{tk}", "info")
             cache.delete(f"news_{tk}", "info")
 
-    results = run_full_analysis(
-        progress_callback=update_progress,
-        selected_tickers=params.get("selected_tickers"),
-        custom_weights=params.get("custom_weights"),
-        filters=params.get("filters"),
-        lang=lang,
-        llm_weight=params.get("llm_weight", 0.2),
-        force_refresh=force_refresh,
-        use_llm_analysis=False,
-    )
-
-    progress_bar.empty()
-    status_text.empty()
+    try:
+        results = run_full_analysis(
+            progress_callback=update_progress,
+            selected_tickers=params.get("selected_tickers"),
+            custom_weights=params.get("custom_weights"),
+            filters=params.get("filters"),
+            lang=lang,
+            llm_weight=params.get("llm_weight", 0.2),
+            force_refresh=force_refresh,
+            use_llm_analysis=False,
+        )
+    except Exception as exc:
+        st.error(t("app.error", lang, msg=str(exc)))
+        return
+    finally:
+        progress_bar.empty()
+        status_text.empty()
+        st.session_state.analysis_running = False
 
     st.session_state.recommendations = results.get("recommendations", [])
     st.session_state.all_rankings = results.get("all_rankings", [])
@@ -481,7 +494,6 @@ def run_analysis(params: Dict[str, Any]) -> None:
         ticker for ticker in st.session_state.get("deep_selection_widget", []) if ticker in valid_tickers
     ]
     st.session_state.analysis_done = True
-    st.session_state.analysis_running = False
 
     from agents.portfolio_manager import build_portfolio
     st.session_state.portfolio = build_portfolio(
@@ -1305,7 +1317,7 @@ def _render_deep_research_result(ticker: str, result: Dict[str, Any], lang: str)
         quote_time = technical.get("price_quote_time") or t("deep.unavailable", lang)
         stale = f" · {t('deep.stale', lang)}" if technical.get("price_stale") else ""
         st.caption(
-            f"{t('deep.live_quote', lang)}: ${_number(technical.get('price'))} · "
+            f"{t('deep.live_quote', lang)}: {_currency(technical.get('price'))} · "
             f"{technical.get('price_session', t('deep.unavailable', lang))} · {quote_time}{stale}"
         )
 
@@ -1318,57 +1330,85 @@ def _render_deep_research_result(ticker: str, result: Dict[str, Any], lang: str)
         plan_cols[2].metric(t("deep.stop", lang), _currency(trade.get("stop_loss")))
         plan_cols[3].metric(t("deep.targets", lang), " / ".join(_currency(value) for value in targets) or "N/A")
         st.caption(f"{t('deep.execution_window', lang)}: {trade.get('execution_window', 'N/A')}")
+        entry_reference = entry.get("high") if trade.get("stance") == "bullish" else entry.get("low")
+        risk_per_share = abs(float(entry_reference) - float(trade.get("stop_loss"))) if entry_reference and trade.get("stop_loss") else None
+        account_risk = float(st.session_state.get("picks_account_capital", 100000)) * float(st.session_state.get("picks_risk_budget_pct", 1.0)) / 100
+        shares = int(account_risk / risk_per_share) if risk_per_share else 0
+        context_cols = st.columns(4)
+        context_cols[0].metric(t("deep.horizon", lang), short.get("horizon", "N/A"))
+        context_cols[1].metric(t("deep.risk_reward", lang), "1.5R / 2.5R")
+        context_cols[2].metric(t("deep.risk_per_share", lang), _currency(risk_per_share))
+        context_cols[3].metric(t("deep.max_shares", lang), str(shares) if shares else "N/A")
 
-        st.markdown("**" + t("deep.session_ranges", lang) + "**")
-        sessions = result.get("session_ranges", {}).get("sessions", {})
-        session_rows = []
-        for key in ("overnight", "pre_market", "regular", "after_hours"):
-            session = sessions.get(key, {})
-            session_rows.append({
-                t("deep.session", lang): session.get("name", key.replace("_", " ").title()),
-                t("deep.date", lang): session.get("date", "N/A"),
-                t("deep.low", lang): _currency(session.get("low")),
-                t("deep.high", lang): _currency(session.get("high")),
-                t("deep.last", lang): _currency(session.get("last")),
-                t("deep.observed", lang): t("deep.yes", lang) if session.get("available") else t("deep.unavailable", lang),
-            })
-        st.dataframe(pd.DataFrame(session_rows), hide_index=True, width="stretch")
-        st.caption(t("deep.session_note", lang))
+        section = st.segmented_control(
+            t("deep.detail_section", lang),
+            options=["sessions", "options", "evidence", "reasoner"],
+            format_func=lambda key: t(f"deep.section_{key}", lang),
+            default="sessions",
+            key=f"picks_detail_{ticker}",
+        ) or "sessions"
 
-        st.markdown("**" + t("deep.options_plan", lang) + "**")
-        if option.get("action") == "buy_to_open":
-            contract = option.get("contract", {})
-            option_cols = st.columns(4)
-            option_cols[0].metric(t("deep.contract", lang), f"{option.get('option_type', '').upper()} {contract.get('strike', 'N/A')}")
-            option_cols[1].metric(t("deep.expiry", lang), option.get("expiry", "N/A"))
-            option_cols[2].metric(t("deep.bid_ask", lang), f"{_currency(contract.get('bid'))} / {_currency(contract.get('ask'))}")
-            option_cols[3].metric(t("deep.max_entry", lang), _currency(option.get("max_entry_premium")))
-            option_rows = [{
-                t("deep.iv", lang): f"{float(contract.get('implied_volatility')) * 100:.1f}%" if contract.get("implied_volatility") is not None else "N/A",
-                t("deep.open_interest", lang): contract.get("open_interest", 0),
-                t("deep.volume", lang): contract.get("volume", 0),
-                t("deep.premium_stop", lang): _currency(option.get("stop_premium")),
-                t("deep.premium_targets", lang): " / ".join(_currency(value) for value in option.get("take_profit_premiums", [])),
-            }]
-            st.dataframe(pd.DataFrame(option_rows), hide_index=True, width="stretch")
-            st.caption(option.get("exit_rule", ""))
-        else:
-            st.info(f"{t('deep.no_options_trade', lang)}: {option.get('reason', 'N/A')}")
-
-        st.markdown("**" + t("deep.quant_evidence", lang) + "**")
-        tech_cols = st.columns(4)
-        tech_cols[0].metric("RSI 14", _number(technical.get("rsi_14")))
-        tech_cols[1].metric("EMA 9 / 21", _pair(technical.get("ema_9"), technical.get("ema_21")))
-        tech_cols[2].metric("ADX 14", _number(technical.get("adx_14")))
-        tech_cols[3].metric("ATR 14", _number(technical.get("atr_14")))
-        if avoid.get("reasons"):
-            st.markdown("**" + t("deep.avoid_reasons", lang) + "**")
-            for reason in avoid["reasons"]:
-                st.markdown(f"- {reason}")
-        if strategy.get("error"):
+        if section == "sessions":
+            sessions = result.get("session_ranges", {}).get("sessions", {})
+            session_rows = []
+            dates = set()
+            for key in ("overnight", "pre_market", "regular", "after_hours"):
+                session = sessions.get(key, {})
+                if session.get("date"):
+                    dates.add(session["date"])
+                coverage = "N/A"
+                if session.get("start_time") and session.get("end_time"):
+                    coverage = f"{pd.Timestamp(session['start_time']).strftime('%H:%M')}–{pd.Timestamp(session['end_time']).strftime('%H:%M')} ET"
+                session_rows.append({
+                    t("deep.session", lang): session.get("name", key.replace("_", " ").title()),
+                    t("deep.date", lang): session.get("date", "N/A"),
+                    t("deep.coverage", lang): coverage,
+                    t("deep.low", lang): _currency(session.get("low")),
+                    t("deep.high", lang): _currency(session.get("high")),
+                    t("deep.last", lang): _currency(session.get("last")),
+                    t("deep.bars", lang): session.get("bars", 0) if session.get("available") else "N/A",
+                })
+            if len(dates) > 1:
+                st.warning(t("deep.mixed_session_dates", lang))
+            st.dataframe(pd.DataFrame(session_rows), hide_index=True, width="stretch")
+            st.caption(t("deep.session_note", lang))
+        elif section == "options":
+            if option.get("action") == "buy_to_open":
+                contract = option.get("contract", {})
+                expiry = option.get("expiry")
+                dte = max(0, (pd.Timestamp(expiry).date() - pd.Timestamp.now().date()).days) if expiry else None
+                option_cols = st.columns(4)
+                option_cols[0].metric(t("deep.contract", lang), contract.get("contract_symbol") or f"{option.get('option_type', '').upper()} {contract.get('strike', 'N/A')}")
+                option_cols[1].metric(t("deep.expiry", lang), f"{expiry} · {dte} DTE" if dte is not None else "N/A")
+                option_cols[2].metric(t("deep.bid_ask", lang), f"{_currency(contract.get('bid'))} / {_currency(contract.get('ask'))}")
+                option_cols[3].metric(t("deep.total_debit", lang), _currency(float(option.get("max_entry_premium", 0)) * 100))
+                option_rows = [{
+                    t("deep.mid_spread", lang): f"{_currency(contract.get('mid'))} / {contract.get('spread_pct', 'N/A')}%",
+                    t("deep.iv", lang): f"{float(contract.get('implied_volatility')) * 100:.1f}%" if contract.get("implied_volatility") is not None else "N/A",
+                    t("deep.open_interest", lang): contract.get("open_interest", 0),
+                    t("deep.volume", lang): contract.get("volume", 0),
+                    t("deep.max_entry", lang): _currency(option.get("max_entry_premium")),
+                    t("deep.premium_stop", lang): _currency(option.get("stop_premium")),
+                    t("deep.premium_targets", lang): " / ".join(_currency(value) for value in option.get("take_profit_premiums", [])),
+                    t("deep.underlying_invalidation", lang): _currency(option.get("underlying_invalidation")),
+                }]
+                st.dataframe(pd.DataFrame(option_rows), hide_index=True, width="stretch")
+                st.caption(option.get("exit_rule", ""))
+            else:
+                st.info(f"{t('deep.no_options_trade', lang)}: {option.get('reason', 'N/A')}")
+        elif section == "evidence":
+            tech_cols = st.columns(4)
+            tech_cols[0].metric("RSI 14", _number(technical.get("rsi_14")))
+            tech_cols[1].metric("EMA 9 / 21", _pair(technical.get("ema_9"), technical.get("ema_21")))
+            tech_cols[2].metric("ADX 14", _number(technical.get("adx_14")))
+            tech_cols[3].metric("ATR 14", _number(technical.get("atr_14")))
+            if avoid.get("reasons"):
+                st.markdown("**" + t("deep.avoid_reasons", lang) + "**")
+                for reason in avoid["reasons"]:
+                    st.markdown(f"- {reason}")
+        elif strategy.get("error"):
             st.warning(t("deep.llm_unavailable", lang))
         else:
-            st.markdown("**" + t("deep.reasoner_view", lang) + "**")
             st.write(strategy.get("reasoning", ""))
             scenario = strategy.get("scenario", {})
             if scenario:
@@ -1399,19 +1439,43 @@ def render_rankings_tab() -> None:
     if not rankings:
         st.warning(t("ranking.nodata", lang))
         return
+    visible_tickers = set(st.session_state.get("scan_filter_tickers") or [])
+    if visible_tickers:
+        rankings = [row for row in rankings if row.get("ticker") in visible_tickers]
     df = pd.DataFrame(rankings).dropna(axis=1, how="all")
+    if df.empty:
+        st.warning(t("ranking.nodata", lang))
+        return
     use_llm = st.session_state.get("use_llm", False)
-    if use_llm and "LLM评分" in df.columns:
-        df = df.sort_values("LLM评分", ascending=False)
-        df["排名"] = range(1, len(df) + 1)
+    if use_llm and "llm_score" in df.columns:
+        df = df.sort_values("llm_score", ascending=False)
+        df["rank"] = range(1, len(df) + 1)
     highlight = st.checkbox(t("ranking.highlight", lang), value=True)
 
     def color_top_rows(row: pd.Series) -> List[str]:
-        if highlight and row.get(t("ranking.rank", lang)) is not None and row[t("ranking.rank", lang)] <= 5:
-            return ["background-color: #e8f5e9"] * len(row)
+        rank_value = row.get("rank", row.get(t("ranking.rank", lang)))
+        if highlight and rank_value is not None and rank_value <= 5:
+            return ["background-color: rgba(34,211,197,.12); color: #e7f7f5"] * len(row)
         return [""] * len(row)
 
-    styled = df.style.apply(color_top_rows, axis=1)
+    if "name" in df:
+        universe = {stock["ticker"]: stock for stock in STOCK_UNIVERSE}
+        df["name"] = df["ticker"].map(lambda ticker: _stock_name(universe.get(ticker, {"ticker": ticker}), lang))
+    if "sector" in df:
+        df["sector"] = df["sector"].map(lambda sector: _sector_name(sector, lang))
+    column_labels = {
+        "rank": t("ranking.rank", lang), "ticker": t("ranking.ticker", lang),
+        "name": t("ranking.name", lang), "sector": t("ranking.sector", lang),
+        "price": t("ranking.price", lang), "growth_score": t("ranking.growth_score", lang),
+        "model_score": t("ranking.model_score", lang), "risk_penalty": t("ranking.risk_penalty", lang),
+        "risk_adjusted_score": t("ranking.risk_adjusted_score", lang), "risk_level": t("ranking.risk_level", lang),
+        "revenue_growth": t("ranking.revenue_growth", lang), "eps_growth": t("ranking.eps_growth", lang),
+        "profit_margin": t("ranking.profit_margin", lang), "peg": "PEG", "roe": "ROE",
+        "debt_equity": t("ranking.debt_equity", lang), "llm_score": t("ranking.llm_score", lang),
+        "technical_signal": t("ranking.technical_signal", lang),
+    }
+    styled = df.style.apply(color_top_rows, axis=1).set_table_styles([])
+    styled.data.columns = [column_labels.get(column, column) for column in styled.data.columns]
     st.dataframe(styled, hide_index=True, width="stretch", height=600)
 
 
@@ -1721,7 +1785,7 @@ def render_home_tab(lang: str) -> None:
     with left:
         st.markdown(
             f"<div class='entry-card'><div class='entry-label'>01</div><div class='entry-title'>{t('landing.scan_title', lang)}</div>"
-            f"<div class='entry-copy'>{t('landing.scan_copy', lang)}</div><div class='entry-meta'>{t('landing.scan_meta', lang)}</div></div>",
+            f"<div class='entry-copy'>{t('landing.scan_copy', lang, n=len(STOCK_UNIVERSE))}</div><div class='entry-meta'>{t('landing.scan_meta', lang, n=len(STOCK_UNIVERSE))}</div></div>",
             unsafe_allow_html=True,
         )
         if st.button(t("landing.scan_action", lang), type="primary", width="stretch", key="landing_scan"):
@@ -1747,11 +1811,16 @@ def render_home_tab(lang: str) -> None:
 
 def _clear_picks_selection() -> None:
     st.session_state["picks_selection_widget"] = []
+    st.session_state["picks_results"] = {}
+    st.session_state["picks_errors"] = {}
+    st.session_state["picks_analyzed_tickers"] = []
+    st.session_state["picks_analyzed_at"] = None
+    st.session_state["picks_run_error"] = None
 
 
 def render_our_picks_page(lang: str, force_refresh: bool = False) -> None:
     st.subheader(t("deep.pool_title", lang))
-    st.caption(t("deep.pool_desc_independent", lang))
+    st.caption(t("deep.pool_desc_independent", lang, n=len(STOCK_UNIVERSE)))
     stock_by_ticker = {stock["ticker"]: stock for stock in STOCK_UNIVERSE}
     selected = st.multiselect(
         t("deep.selector", lang),
@@ -1760,6 +1829,17 @@ def render_our_picks_page(lang: str, force_refresh: bool = False) -> None:
         format_func=lambda ticker: f"{ticker} — {_stock_name(stock_by_ticker[ticker], lang)} · {_sector_name(stock_by_ticker[ticker]['sector'], lang)}",
         key="picks_selection_widget",
     )
+    account_col, risk_col = st.columns(2)
+    with account_col:
+        st.number_input(
+            t("portfolio.capital", lang), min_value=1000, max_value=10_000_000,
+            value=100_000, step=10_000, key="picks_account_capital",
+        )
+    with risk_col:
+        st.number_input(
+            t("deep.risk_budget_pct", lang), min_value=0.1, max_value=5.0,
+            value=1.0, step=0.1, key="picks_risk_budget_pct",
+        )
     st.button(
         t("deep.clear", lang),
         width="stretch",
@@ -1770,21 +1850,35 @@ def render_our_picks_page(lang: str, force_refresh: bool = False) -> None:
         from agents.deep_research import analyze_tickers
 
         st.session_state.picks_status = "running"
+        st.session_state.picks_run_error = None
         progress = st.progress(0, text=t("deep.running", lang))
 
         def update(ticker: str, completed: int, total: int) -> None:
             progress.progress(completed / total if total else 0, text=f"{ticker} ({completed + 1}/{total})")
 
-        results = analyze_tickers(selected, lang=lang, force_refresh=force_refresh, progress_callback=update)
-        progress.progress(1.0, text=t("deep.complete", lang))
-        progress.empty()
-        st.session_state.picks_results = results
-        st.session_state.picks_errors = {ticker: result["error"] for ticker, result in results.items() if result.get("error")}
-        st.session_state.picks_status = "success" if not st.session_state.picks_errors else "partial"
+        try:
+            results = analyze_tickers(selected, lang=lang, force_refresh=force_refresh, progress_callback=update)
+            st.session_state.picks_results = results
+            st.session_state.picks_errors = {ticker: result["error"] for ticker, result in results.items() if result.get("error")}
+            st.session_state.picks_analyzed_tickers = list(selected)
+            st.session_state.picks_analyzed_at = pd.Timestamp.now(tz="UTC").isoformat()
+            st.session_state.picks_status = "success" if not st.session_state.picks_errors else "partial"
+            progress.progress(1.0, text=t("deep.complete", lang))
+        except Exception as exc:
+            st.session_state.picks_status = "error"
+            st.session_state.picks_run_error = str(exc)
+            st.error(t("app.error", lang, msg=str(exc)))
+        finally:
+            progress.empty()
     results = st.session_state.get("picks_results", {})
     if results:
+        analyzed = st.session_state.get("picks_analyzed_tickers", [])
+        if set(selected) != set(analyzed):
+            st.warning(t("deep.results_stale", lang))
         st.markdown("---")
         st.subheader(t("deep.results", lang))
+        if st.session_state.get("picks_analyzed_at"):
+            st.caption(t("deep.analyzed_at", lang, time=st.session_state.picks_analyzed_at))
         for ticker, result in results.items():
             _render_deep_research_result(ticker, result, lang)
 
@@ -2193,11 +2287,12 @@ def build_minimal_sidebar() -> Dict[str, Any]:
 
 
 def render_primary_navigation(lang: str) -> None:
-    home, scan, picks = st.columns(3)
+    home, scan, picks, portfolio = st.columns(4)
     actions = [
         (home, "home", t("nav.home", lang)),
         (scan, "scan", t("nav.scan", lang)),
         (picks, "picks", t("nav.picks", lang)),
+        (portfolio, "portfolio", t("portfolio.title", lang)),
     ]
     for column, route, label in actions:
         with column:
@@ -2213,6 +2308,7 @@ def render_primary_navigation(lang: str) -> None:
 
 def render_scan_page(params: Dict[str, Any], lang: str) -> None:
     params = dict(params)
+    st.session_state.scan_filter_tickers = list(params.get("selected_tickers") or [])
     params["selected_tickers"] = [stock["ticker"] for stock in STOCK_UNIVERSE]
     with st.container(key="primary_analysis_action"):
         run_clicked = st.button(
@@ -2227,30 +2323,36 @@ def render_scan_page(params: Dict[str, Any], lang: str) -> None:
     if not st.session_state.analysis_done:
         st.caption(t("scan.ready", lang, n=len(STOCK_UNIVERSE)))
         return
-    tabs = st.tabs([
-        t("tab.recommend", lang), t("tab.ranking", lang), t("tab.charts", lang),
-        t("tab.pool", lang), t("tab.backtest", lang), t("tab.compare", lang),
-        t("tab.valuation", lang), t("tab.news", lang), t("industry_news.title", lang), t("tab.ai", lang),
-    ])
-    with tabs[0]:
+    views = {
+        "overview": t("tab.recommend", lang), "ranking": t("tab.ranking", lang),
+        "charts": t("tab.charts", lang), "compare": t("tab.compare", lang),
+        "valuation": t("tab.valuation", lang), "backtest": t("tab.backtest", lang),
+        "news": t("tab.news", lang), "industry": t("industry_news.title", lang),
+        "pool": t("tab.pool", lang), "system": t("tab.ai", lang),
+    }
+    selected_view = st.selectbox(
+        t("scan.view", lang), options=list(views), format_func=views.get,
+        key="scan_view", label_visibility="collapsed",
+    )
+    if selected_view == "overview":
         render_recommendations_tab()
-    with tabs[1]:
+    elif selected_view == "ranking":
         render_rankings_tab()
-    with tabs[2]:
+    elif selected_view == "charts":
         render_charts_tab()
-    with tabs[3]:
+    elif selected_view == "pool":
         render_stock_pool_tab()
-    with tabs[4]:
+    elif selected_view == "backtest":
         render_backtest_tab(params["selected_tickers"])
-    with tabs[5]:
+    elif selected_view == "compare":
         render_compare_tab()
-    with tabs[6]:
+    elif selected_view == "valuation":
         render_valuation_tab()
-    with tabs[7]:
+    elif selected_view == "news":
         render_news_tab()
-    with tabs[8]:
+    elif selected_view == "industry":
         render_industry_news_tab()
-    with tabs[9]:
+    elif selected_view == "system":
         render_ai_status_tab()
 
 
@@ -2296,6 +2398,9 @@ try {
     elif route == "picks":
         params = build_minimal_sidebar()
         render_our_picks_page(lang, force_refresh=params["force_refresh"])
+    elif route == "portfolio":
+        build_minimal_sidebar()
+        render_portfolio_tab()
     else:
         build_minimal_sidebar()
         render_home_tab(lang)

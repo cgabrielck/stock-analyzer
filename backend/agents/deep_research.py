@@ -58,7 +58,10 @@ def analyze_ticker(
         stock["total_score"] = round(growth_score * 0.7 + technical_score * 0.3, 1)
     stock["risk_metrics"] = technical.get("risk_metrics", {"available": False})
     stock.update(calculate_risk_adjusted_score(stock["total_score"], stock["risk_metrics"]))
-    return analyze_selected_stock(stock, lang=lang, technical=technical, progress_callback=progress_callback)
+    return analyze_selected_stock(
+        stock, lang=lang, technical=technical, progress_callback=progress_callback,
+        force_refresh=force_refresh,
+    )
 
 
 def analyze_tickers(
@@ -111,10 +114,10 @@ def analyze_tickers(
 
 def analyze_selected_stock(
     stock: Dict[str, Any], lang: str = "zh_tw", technical: Optional[Dict[str, Any]] = None,
-    progress_callback: Optional[ProgressCallback] = None,
+    progress_callback: Optional[ProgressCallback] = None, force_refresh: bool = False,
 ) -> Dict[str, Any]:
     ticker = stock["ticker"]
-    technical = technical or compute_technical_indicators(ticker, period="1y", force_refresh=False)
+    technical = technical or compute_technical_indicators(ticker, period="1y", force_refresh=force_refresh)
     if technical.get("error"):
         return {"ticker": ticker, "error": technical["error"]}
 
@@ -126,9 +129,9 @@ def analyze_selected_stock(
     _emit(progress_callback, ticker, "market_data", "started")
     provider_executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
     provider_futures = {
-        "options": provider_executor.submit(fetch_options_chain, ticker, current_price=current_price),
-        "sessions": provider_executor.submit(fetch_trading_session_ranges, ticker),
-        "news": provider_executor.submit(fetch_news, ticker, 5),
+        "options": provider_executor.submit(fetch_options_chain, ticker, current_price=current_price, force_refresh=force_refresh),
+        "sessions": provider_executor.submit(fetch_trading_session_ranges, ticker, force_refresh=force_refresh),
+        "news": provider_executor.submit(fetch_news, ticker, max_items=5, force_refresh=force_refresh),
     }
     done, pending = concurrent.futures.wait(provider_futures.values(), timeout=MARKET_DATA_TIMEOUT_SECONDS)
     values: Dict[str, Any] = {}
@@ -187,6 +190,18 @@ def analyze_selected_stock(
         "enrichment_errors": {key: value for key, value in enrichment_errors.items() if value},
         "quant_score": stock.get("total_score"),
         "risk_adjusted_score": stock.get("risk_adjusted_score"),
+        "provenance": {
+            "fundamentals": stock.get("data_quality", {}),
+            "technical": {
+                "source": technical.get("technical_source"),
+                "period": technical.get("technical_period"),
+                "as_of": technical.get("technical_as_of"),
+                "fetched_at": technical.get("technical_fetched_at"),
+                "from_cache": technical.get("technical_from_cache", False),
+            },
+            "options": {key: options.get(key) for key in ("source", "fetched_at", "as_of", "from_cache")},
+            "sessions": {key: session_ranges.get(key) for key in ("source", "fetched_at", "as_of", "from_cache")},
+        },
     }
 
 

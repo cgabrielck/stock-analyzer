@@ -459,7 +459,7 @@ def run_analysis(params: Dict[str, Any]) -> None:
         for tk in tickers:
             cache.delete(tk, "info")
             cache.delete(f"tech_{tk}", "info")
-            cache.delete(f"news_{tk}", "info")
+            cache.delete(f"news_v3_{tk}_7d", "info")
 
     try:
         results = run_full_analysis(
@@ -791,18 +791,19 @@ def render_recommendations_tab() -> None:
                         badge += f" <span style='font:500 .61rem var(--mono);color:var(--muted);'>{html.escape(quote_text)}</span>"
                     fetched = rec.get("data_quality", {}).get("fetched_at") or rec.get("fetched_at")
                     if fetched:
-                        from datetime import datetime as _dt
                         try:
-                            ft = _dt.strptime(fetched[:19], "%Y-%m-%d %H:%M:%S")
-                            mins_ago = (_dt.now() - ft).total_seconds() / 60
+                            ft = pd.Timestamp(fetched)
+                            if ft.tzinfo is None:
+                                ft = ft.tz_localize("UTC")
+                            mins_ago = (pd.Timestamp.now(tz="UTC") - ft.tz_convert("UTC")).total_seconds() / 60
                             if mins_ago < 5:
                                 dot = ""
                             elif mins_ago < 30:
                                 dot = ""
                             else:
                                 dot = ""
-                            badge += f" <span style='font-size:0.7rem;color:#86868b;'>{dot} {fetched[:16]}</span>"
-                        except ValueError:
+                            badge += f" <span style='font-size:0.7rem;color:#86868b;'>{dot} {_format_timestamp(fetched)}</span>"
+                        except (TypeError, ValueError):
                             pass
                     if badge:
                         st.markdown(badge, unsafe_allow_html=True)
@@ -859,8 +860,8 @@ def render_recommendations_tab() -> None:
                     pass
             st.caption(t("recommend.fetched_at", lang, time=fetched))
             source = dq.get("source") or rec.get("data_source") or "unknown"
-            if source == "seed_data":
-                st.warning("Offline seed data: do not treat this recommendation as live analysis.")
+            if dq.get("source_type") == "seed" or any(component.get("source") == "seed_data" for component in dq.get("source_components", [])):
+                st.warning(t("provenance.seed_warning", lang))
             else:
                 st.caption(f"Data source: {source}")
             risk = rec.get("risk_metrics", {})
@@ -885,10 +886,10 @@ def render_recommendations_tab() -> None:
 
             extra_cols = st.columns(4)
             items = [
-                (t("metric.beta", lang), f"{rec.get('beta', 0):.2f}" if rec.get("beta") else "N/A"),
-                (t("metric.div_yield", lang), f"{rec.get('dividend_yield', 0)*100:.2f}%" if rec.get("dividend_yield") else "N/A"),
+                (t("metric.beta", lang), f"{rec.get('beta', 0):.2f}" if rec.get("beta") is not None else "N/A"),
+                (t("metric.div_yield", lang), f"{rec.get('dividend_yield', 0)*100:.2f}%" if rec.get("dividend_yield") is not None else "N/A"),
                 (t("metric.rating", lang), rec.get("rating_label") or "N/A"),
-                (t("metric.inst_own", lang), f"{rec.get('held_percent_institutions', 0)*100:.1f}%" if rec.get("held_percent_institutions") else "N/A"),
+                (t("metric.inst_own", lang), f"{rec.get('held_percent_institutions', 0)*100:.1f}%" if rec.get("held_percent_institutions") is not None else "N/A"),
             ]
             for extra_col, (lbl, val) in zip(extra_cols, items):
                 extra_col.metric(lbl, val)
@@ -1226,7 +1227,9 @@ def render_recommendations_tab() -> None:
                 _render_kline_chart(ticker, lang, f"recommend_chart_{ticker}", rec.get("price"))
 
 
-def _render_deep_research_result(ticker: str, result: Dict[str, Any], lang: str) -> None:
+def _render_deep_research_result(
+    ticker: str, result: Dict[str, Any], lang: str, force_refresh: bool = False,
+) -> None:
     if result.get("error"):
         st.error(f"{ticker}: {result['error']}")
         return
@@ -1253,6 +1256,34 @@ def _render_deep_research_result(ticker: str, result: Dict[str, Any], lang: str)
             f"{t('deep.live_quote', lang)}: {_currency(technical.get('price'))} · "
             f"{technical.get('price_session', t('deep.unavailable', lang))} · {quote_time}{stale}"
         )
+        provenance = result.get("provenance", {})
+        fundamental_source = provenance.get("fundamentals", {})
+        technical_source = provenance.get("technical", {})
+        if fundamental_source:
+            source_flags = []
+            if fundamental_source.get("from_cache"):
+                source_flags.append(t("provenance.cached", lang))
+            if fundamental_source.get("is_fallback"):
+                source_flags.append(t("provenance.fallback", lang))
+            if fundamental_source.get("stale"):
+                source_flags.append(t("provenance.stale", lang))
+            st.caption(t(
+                "provenance.fundamentals", lang,
+                source=fundamental_source.get("source", "N/A"),
+                as_of=_format_timestamp(fundamental_source.get("as_of")),
+                status=" · ".join(source_flags) or t("provenance.live", lang),
+            ))
+            if fundamental_source.get("source_type") == "seed" or any(
+                component.get("source") == "seed_data" for component in fundamental_source.get("source_components", [])
+            ):
+                st.warning(t("provenance.seed_warning", lang))
+        if technical_source:
+            st.caption(t(
+                "provenance.technical", lang,
+                source=technical_source.get("source", "N/A"),
+                as_of=_format_timestamp(technical_source.get("as_of")),
+                period=technical_source.get("period", "N/A"),
+            ))
 
         st.markdown("**" + t("deep.execution_plan", lang) + "**")
         entry = trade.get("entry_zone", {})
@@ -1289,7 +1320,7 @@ def _render_deep_research_result(ticker: str, result: Dict[str, Any], lang: str)
                         from backtesting.our_picks import run_our_picks_validation
 
                         with st.spinner(t("validation.running", lang)):
-                            validation = run_our_picks_validation(ticker)
+                            validation = run_our_picks_validation(ticker, force_refresh=force_refresh)
                             result["validation"] = validation
                             st.session_state.picks_results[ticker]["validation"] = validation
                         st.rerun()
@@ -1401,6 +1432,18 @@ def _currency(value: Any) -> str:
 
 def _percent(value: Any) -> str:
     return f"{value:.1f}%" if isinstance(value, (int, float)) else "N/A"
+
+
+def _format_timestamp(value: Any) -> str:
+    if not value:
+        return "N/A"
+    try:
+        timestamp = pd.Timestamp(value)
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.tz_localize("UTC")
+        return timestamp.tz_convert("UTC").strftime("%Y-%m-%d %H:%M UTC")
+    except (TypeError, ValueError):
+        return str(value)
 
 
 def _price_range(low: Any, high: Any) -> str:
@@ -1879,7 +1922,7 @@ def render_our_picks_page(lang: str, force_refresh: bool = False) -> None:
         if st.session_state.get("picks_analyzed_at"):
             st.caption(t("deep.analyzed_at", lang, time=st.session_state.picks_analyzed_at))
         for ticker, result in results.items():
-            _render_deep_research_result(ticker, result, lang)
+            _render_deep_research_result(ticker, result, lang, force_refresh=force_refresh)
 
 
 def _import_picks_to_news() -> None:
@@ -1947,6 +1990,12 @@ def _render_picks_news_result(ticker: str, result: Dict[str, Any], lang: str) ->
             ))
         else:
             st.caption(t("picks_news.no_earnings", lang))
+        st.caption(t(
+            "picks_news.provenance", lang,
+            fetched=_format_timestamp(result.get("fetched_at")),
+            cutoff=_format_timestamp(result.get("news_cutoff_at")),
+            earnings=result.get("earnings_source") or "N/A",
+        ))
         errors = result.get("errors", {})
         if result.get("status") == "partial":
             st.warning(t("picks_news.partial", lang))

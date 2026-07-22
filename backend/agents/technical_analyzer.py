@@ -143,10 +143,13 @@ def calculate_technical_score(data: Dict[str, Any]) -> float:
 def compute_technical_indicators(
     ticker: str, period: str = "6mo", force_refresh: bool = False,
 ) -> Dict[str, Any]:
+    cache_key = f"tech_v2_{ticker}_{period}"
     if not force_refresh:
-        cached = cache.get(f"tech_{ticker}", "info")
+        cached = cache.get(cache_key, "info")
         if cached:
-            return cached
+            result = dict(cached)
+            result["technical_from_cache"] = True
+            return result
 
     try:
         stock = yf.Ticker(ticker)
@@ -184,6 +187,11 @@ def compute_technical_indicators(
             "price_quote_time": latest_quote["quote_time"],
             "price_market_state": latest_quote["market_state"],
             "price_stale": latest_quote["stale"],
+            "technical_source": "yfinance_history",
+            "technical_period": period,
+            "technical_as_of": hist.index[-1].isoformat() if hasattr(hist.index[-1], "isoformat") else str(hist.index[-1]),
+            "technical_fetched_at": pd.Timestamp.now(tz="UTC").isoformat(),
+            "technical_from_cache": False,
             "rsi_14": rsi_val,
             "macd_line": macd_line,
             "macd_signal": macd_signal,
@@ -210,7 +218,7 @@ def compute_technical_indicators(
         result["technical_score"] = calculate_technical_score(result)
 
         agent_state.log_source_result(f"technical:{ticker}", True)
-        cache.set(f"tech_{ticker}", "info", result)
+        cache.set(cache_key, "info", result)
         return result
 
     except Exception as e:

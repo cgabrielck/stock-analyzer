@@ -53,6 +53,15 @@ def test_regular_state_ignores_retained_extended_prices() -> None:
     assert get_latest_quote(stock, now=NOW)["price"] == 110
 
 
+def test_active_quote_without_timestamp_is_marked_stale() -> None:
+    stock = FakeStock({"marketState": "REGULAR", "regularMarketPrice": 110})
+
+    quote = get_latest_quote(stock, now=NOW)
+
+    assert quote["price"] == 110
+    assert quote["stale"] is True
+
+
 def test_post_state_selects_after_hours_price() -> None:
     stock = FakeStock({
         "marketState": "POST",

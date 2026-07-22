@@ -1,10 +1,11 @@
 import concurrent.futures
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
 import os
 import re
 from typing import Any, Callable, Dict, Optional
+from zoneinfo import ZoneInfo
 
 import yfinance as yf
 import pandas as pd
@@ -50,21 +51,75 @@ except Exception:
 
 REQUEST_TIMEOUT: int = 30
 MAX_WORKERS: int = 3
+EASTERN = ZoneInfo("America/New_York")
+NEWS_MAX_AGE_DAYS = 7
+NEWS_DISTINCTIVE_ALIASES = {
+    "V": ["Visa"], "MA": ["Mastercard"], "LI": ["Li Auto"],
+    "GE": ["GE Aerospace", "General Electric"], "HD": ["Home Depot"],
+}
 
 
 import time as _time
 
 
 def _now_str() -> str:
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(timezone.utc).isoformat()
 
 
 SCORING_KEYS: list[str] = ["revenue_growth", "eps_growth", "profit_margin", "peg", "roe", "debt_equity"]
 
 
 def _count_available_metrics(data: Dict[str, Any]) -> int:
-    return sum(1 for k in SCORING_KEYS if data.get(k) is not None and data.get(k) != 0)
+    count = 0
+    for key in SCORING_KEYS:
+        value = data.get(key)
+        try:
+            valid = value is not None and float(value) == float(value)
+        except (TypeError, ValueError):
+            valid = False
+        if key == "peg":
+            valid = valid and float(value) > 0
+        count += int(valid)
+    return count
+
+
+def _seed_as_of(seed: Dict[str, Any]) -> Optional[str]:
+    value = seed.get("snapshot_as_of") or seed.get("fetched_at")
+    if not value:
+        return None
+    try:
+        timestamp = pd.Timestamp(value)
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.tz_localize("UTC")
+        return timestamp.tz_convert("UTC").isoformat()
+    except (TypeError, ValueError):
+        return None
+
+
+def _data_quality(
+    data: Dict[str, Any],
+    source: str,
+    source_type: str,
+    *,
+    from_cache: bool = False,
+    is_fallback: bool = False,
+    stale: bool = False,
+    as_of: Optional[str] = None,
+    components: Optional[list[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "source": source,
+        "source_type": source_type,
+        "from_cache": from_cache,
+        "is_fallback": is_fallback,
+        "stale": stale,
+        "fetched_at": data.get("fetched_at") or _now_str(),
+        "as_of": as_of,
+        "metrics_available": _count_available_metrics(data),
+        "metrics_total": len(SCORING_KEYS),
+        "source_components": components or [],
+    }
 
 
 def fetch_stock_data(ticker: str, force_refresh: bool = False) -> Dict[str, Any]:
@@ -72,13 +127,17 @@ def fetch_stock_data(ticker: str, force_refresh: bool = False) -> Dict[str, Any]
         cached = cache.get(ticker, "info")
         if cached:
             cached = dict(cached)
-            cached["data_quality"] = {
-                "from_cache": True,
-                "fetched_at": cached.get("fetched_at", "unknown"),
-                "source": cached.get("data_source", "cache"),
-                "metrics_available": _count_available_metrics(cached),
-                "metrics_total": len(SCORING_KEYS),
-            }
+            previous_quality = cached.get("data_quality", {})
+            cached["data_quality"] = _data_quality(
+                cached,
+                cached.get("data_source", "cache"),
+                previous_quality.get("source_type", "live"),
+                from_cache=True,
+                is_fallback=previous_quality.get("is_fallback", False),
+                stale=previous_quality.get("stale", cached.get("price_stale", False)),
+                as_of=previous_quality.get("as_of") or cached.get("price_quote_time"),
+                components=previous_quality.get("source_components", []),
+            )
             return cached
 
     if force_refresh and clear_provider_cache:
@@ -169,13 +228,11 @@ def fetch_stock_data(ticker: str, force_refresh: bool = False) -> Dict[str, Any]
             except Exception as e:
                 agent_state.log_source_result(f"insider:{ticker}", False, str(e))
 
-            result["data_quality"] = {
-                "from_cache": False,
-                "fetched_at": result["fetched_at"],
-                "source": result["data_source"],
-                "metrics_available": _count_available_metrics(result),
-                "metrics_total": len(SCORING_KEYS),
-            }
+            result["data_quality"] = _data_quality(
+                result, "yfinance", "live", stale=bool(result.get("price_stale")),
+                as_of=result.get("price_quote_time") or result["fetched_at"],
+                components=[{"source": "yfinance", "role": "fundamentals_and_quote"}],
+            )
 
             agent_state.log_source_result(f"yfinance:{ticker}", True)
             cache.set(ticker, "info", result)
@@ -195,18 +252,14 @@ def fetch_stock_data(ticker: str, force_refresh: bool = False) -> Dict[str, Any]
         china["cik"] = ticker_to_cik(ticker)
         china["fetched_at"] = _now_str()
         china["data_source"] = "sina_eastmoney"
-        china["data_quality"] = {
-            "from_cache": False,
-            "fetched_at": china["fetched_at"],
-            "source": china["data_source"],
-            "metrics_available": _count_available_metrics(china),
-            "metrics_total": len(SCORING_KEYS),
-        }
+        components = [{"source": "sina_eastmoney", "role": "quote_and_cn_fundamentals"}]
+        seed_used = False
         yahoo_fund = _fetch_yahoo_fundamentals(ticker)
         if yahoo_fund:
             for k, v in yahoo_fund.items():
                 if k != "_source" and k not in china:
                     china[k] = v
+            components.append({"source": "yahoo_quote_summary", "role": "fundamentals"})
         else:
             seed = _SEED_DATA.get(ticker)
             if seed:
@@ -221,6 +274,14 @@ def fetch_stock_data(ticker: str, force_refresh: bool = False) -> Dict[str, Any]
                           "target_high_price", "target_low_price", "forward_pe"):
                     if k not in china and k in seed:
                         china[k] = seed[k]
+                seed_used = True
+                components.append({"source": "seed_data", "role": "fundamentals", "as_of": _seed_as_of(seed), "stale": True})
+        china["data_source"] = "+".join(component["source"] for component in components)
+        china["data_quality"] = _data_quality(
+            china, china["data_source"], "hybrid" if len(components) > 1 else "live",
+            is_fallback=True, stale=seed_used, as_of=china.get("price_quote_time") or china["fetched_at"],
+            components=components,
+        )
         agent_state.log_source_result(f"china:{ticker}", True)
         return china
 
@@ -231,19 +292,19 @@ def fetch_stock_data(ticker: str, force_refresh: bool = False) -> Dict[str, Any]
         yahoo_fund["ticker"] = ticker
         yahoo_fund["cik"] = ticker_to_cik(ticker)
         yahoo_fund["fetched_at"] = _now_str()
-        yahoo_fund["data_source"] = "yahoo_quote_summary"
+        yahoo_fund["data_source"] = "yahoo_quote_summary+yahoo_chart" if chart else "yahoo_quote_summary"
         yahoo_fund["sector"] = next(
             (s["sector"] for s in STOCK_UNIVERSE if s["ticker"] == ticker), None
         )
         if price:
             yahoo_fund["price"] = price
-        yahoo_fund["data_quality"] = {
-            "from_cache": False,
-            "fetched_at": yahoo_fund["fetched_at"],
-            "source": yahoo_fund["data_source"],
-            "metrics_available": _count_available_metrics(yahoo_fund),
-            "metrics_total": len(SCORING_KEYS),
-        }
+        components = [{"source": "yahoo_quote_summary", "role": "fundamentals"}]
+        if chart:
+            components.append({"source": "yahoo_chart", "role": "quote"})
+        yahoo_fund["data_quality"] = _data_quality(
+            yahoo_fund, yahoo_fund["data_source"], "hybrid" if chart else "live",
+            is_fallback=True, as_of=yahoo_fund["fetched_at"], components=components,
+        )
         del yahoo_fund["_source"]
         agent_state.log_source_result(f"yahoo:{ticker}", True)
         return yahoo_fund
@@ -264,32 +325,34 @@ def fetch_stock_data(ticker: str, force_refresh: bool = False) -> Dict[str, Any]
                       "roe", "debt_equity", "longName"):
                 if k not in fallback and k in seed:
                     fallback[k] = seed[k]
-        fallback["data_quality"] = {
-            "from_cache": False,
-            "fetched_at": fallback["fetched_at"],
-            "source": fallback["data_source"],
-            "metrics_available": _count_available_metrics(fallback),
-            "metrics_total": len(SCORING_KEYS),
-        }
+        components = [{"source": "yahoo_chart", "role": "quote"}]
+        if seed:
+            components.append({"source": "seed_data", "role": "fundamentals", "as_of": _seed_as_of(seed), "stale": True})
+        fallback["data_quality"] = _data_quality(
+            fallback, fallback["data_source"], "hybrid" if seed else "price_only",
+            is_fallback=True, stale=bool(seed),
+            as_of=_seed_as_of(seed) if seed else fallback["fetched_at"], components=components,
+        )
         agent_state.log_source_result(f"fallback:{ticker}", True)
         return fallback
 
     seed = _SEED_DATA.get(ticker)
     if seed:
         seed = dict(seed)
+        snapshot_as_of = _seed_as_of(seed)
+        seed["snapshot_as_of"] = snapshot_as_of
         seed["fetched_at"] = _now_str()
         seed["data_source"] = "seed_data"
-        seed["data_quality"] = {
-            "from_cache": False,
-            "fetched_at": seed["fetched_at"],
-            "source": seed["data_source"],
-            "metrics_available": _count_available_metrics(seed),
-            "metrics_total": len(SCORING_KEYS),
-        }
+        seed["data_quality"] = _data_quality(
+            seed, "seed_data", "seed", is_fallback=True, stale=True, as_of=snapshot_as_of,
+            components=[{"source": "seed_data", "role": "fundamentals_and_quote", "as_of": snapshot_as_of, "stale": True}],
+        )
         agent_state.log_source_result(f"seed:{ticker}", True)
         return seed
 
-    return {"ticker": ticker, "error": last_error or "unknown", "sector": None}
+    error = {"ticker": ticker, "error": last_error or "unknown", "sector": None, "fetched_at": _now_str(), "data_source": "unavailable"}
+    error["data_quality"] = _data_quality(error, "unavailable", "error", is_fallback=True, stale=True)
+    return error
 
 
 def _safe_df(df: Any) -> Optional[Any]:
@@ -566,8 +629,11 @@ def _extract_news(item: dict) -> dict:
     }
 
 
-def fetch_news(ticker: str, max_items: int = 5, force_refresh: bool = False) -> list[dict[str, Any]]:
-    cache_key = f"news_v2_{ticker}"
+def fetch_news(
+    ticker: str, max_items: int = 5, force_refresh: bool = False,
+    max_age_days: int = NEWS_MAX_AGE_DAYS, now: Optional[datetime] = None,
+) -> list[dict[str, Any]]:
+    cache_key = f"news_v3_{ticker}_{max_age_days}d"
     cached = None if force_refresh else cache.get(cache_key, "info", ttl=900)
     if cached is not None:
         return cached[:max_items]
@@ -584,10 +650,18 @@ def fetch_news(ticker: str, max_items: int = 5, force_refresh: bool = False) -> 
 
     result: list[dict[str, Any]] = []
     seen = set()
+    current_time = now or datetime.now(timezone.utc)
+    cutoff = current_time - timedelta(days=max_age_days)
     for item in raw_news[:20]:
         parsed = _extract_news(item)
         title = parsed["title"]
-        if not title or parsed["id"] in seen or not _news_is_relevant(ticker, title, parsed["summary"]):
+        published = pd.Timestamp(parsed["published_at"]) if parsed.get("published_at") else None
+        if (
+            not title or parsed["id"] in seen
+            or published is None or published < pd.Timestamp(cutoff)
+            or published > pd.Timestamp(current_time + timedelta(minutes=10))
+            or not _news_is_relevant(ticker, title, parsed["summary"])
+        ):
             continue
         seen.add(parsed["id"])
         summary = parsed["summary"]
@@ -603,6 +677,8 @@ def fetch_news(ticker: str, max_items: int = 5, force_refresh: bool = False) -> 
             "published_at": parsed["published_at"],
             "content_type": parsed["content_type"],
             "source": "yahoo",
+            "fetched_at": current_time.isoformat(),
+            "cutoff_at": cutoff.isoformat(),
         })
 
     result.sort(key=lambda article: article.get("published_at") or "", reverse=True)
@@ -612,8 +688,20 @@ def fetch_news(ticker: str, max_items: int = 5, force_refresh: bool = False) -> 
 
 
 def _news_is_relevant(ticker: str, title: str, summary: str) -> bool:
-    text = f"{title} {summary}".lower()
-    aliases = {ticker.lower()}
+    original_text = f"{title} {summary}"
+    text = original_text.lower()
+    ticker = ticker.upper()
+    if len(ticker) <= 3:
+        structured = (
+            re.search(rf"\${re.escape(ticker)}\b", original_text)
+            or re.search(rf"\({re.escape(ticker)}\)", original_text)
+            or re.search(rf"\b(?:NYSE|NASDAQ):{re.escape(ticker)}\b", original_text)
+        )
+        if structured:
+            return True
+        aliases = set(alias.lower() for alias in NEWS_DISTINCTIVE_ALIASES.get(ticker, []))
+    else:
+        aliases = {ticker.lower()}
     metadata = next((stock for stock in STOCK_UNIVERSE if stock["ticker"] == ticker), {})
     english_name = str(metadata.get("name_en") or "").lower()
     if english_name:
@@ -621,9 +709,6 @@ def _news_is_relevant(ticker: str, title: str, summary: str) -> bool:
         core_name = re.sub(r"\b(inc|corp|corporation|company|holdings|ltd|plc)\.?\b", "", english_name).strip()
         if len(core_name) >= 3:
             aliases.add(core_name)
-        first_word = core_name.split()[0] if core_name else ""
-        if len(first_word) >= 4:
-            aliases.add(first_word)
     return any(re.search(rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])", text) for alias in aliases if alias)
 
 
@@ -634,22 +719,23 @@ def fetch_next_earnings(ticker: str, force_refresh: bool = False) -> Dict[str, A
         return cached
     stock = yf.Ticker(ticker, session=_REQUEST_SESSION)
     result: Dict[str, Any] = {"available": False, "source": None}
+    today_et = datetime.now(EASTERN).date()
     try:
         calendar = stock.calendar
         dates = _calendar_earnings_dates(calendar)
-        future = [value for value in dates if value >= date.today()]
+        future = [value for value in dates if value >= today_et]
         if future:
-            result = _earnings_result(future, "yahoo_calendar")
+            result = _earnings_result(future, "yahoo_calendar", today=today_et)
     except Exception as exc:
         result["calendar_error"] = str(exc)
     if not result.get("available"):
         try:
             dates_frame = stock.get_earnings_dates(limit=12)
             if dates_frame is not None and not dates_frame.empty:
-                dates = [timestamp.date() for timestamp in pd.to_datetime(dates_frame.index, utc=True)]
-                future = [value for value in dates if value >= date.today()]
+                dates = [_earnings_date_et(timestamp) for timestamp in dates_frame.index]
+                future = [value for value in dates if value >= today_et]
                 if future:
-                    result = _earnings_result(future, "yahoo_earnings_dates")
+                    result = _earnings_result(future, "yahoo_earnings_dates", today=today_et)
         except Exception as exc:
             result["fallback_error"] = str(exc)
     cache.set(cache_key, "info", result, ttl=21600)
@@ -681,21 +767,28 @@ def _calendar_earnings_dates(calendar: Any) -> list[date]:
     result = []
     for value in values:
         try:
-            parsed = pd.Timestamp(value)
-            result.append(parsed.date())
+            result.append(_earnings_date_et(value))
         except (TypeError, ValueError):
             continue
     return sorted(set(result))
 
 
-def _earnings_result(dates: list[date], source: str) -> Dict[str, Any]:
+def _earnings_date_et(value: Any) -> date:
+    timestamp = pd.Timestamp(value)
+    if timestamp.tzinfo is None:
+        return timestamp.date()
+    return timestamp.tz_convert("America/New_York").date()
+
+
+def _earnings_result(dates: list[date], source: str, today: Optional[date] = None) -> Dict[str, Any]:
     start, end = min(dates), max(dates)
+    current_date = today or datetime.now(EASTERN).date()
     return {
         "available": True,
         "date_start": start.isoformat(),
         "date_end": end.isoformat(),
         "next_date": start.isoformat(),
-        "days_until": (start - date.today()).days,
+        "days_until": (start - current_date).days,
         "precision": "exact" if start == end else "range",
         "source": source,
     }
@@ -739,7 +832,16 @@ def fetch_financials_history(ticker: str) -> dict[str, list[float]]:
     return result
 
 
-def fetch_options_chain(ticker: str, current_price: Optional[float] = None) -> Dict[str, Any]:
+def fetch_options_chain(
+    ticker: str, current_price: Optional[float] = None, force_refresh: bool = False,
+) -> Dict[str, Any]:
+    spot_key = f"{round(float(current_price), 1):.1f}" if current_price else "auto"
+    cache_key = f"options_v2_{ticker}_{spot_key}"
+    cached = None if force_refresh else cache.get(cache_key, "info", ttl=60)
+    if cached is not None:
+        result = dict(cached)
+        result["from_cache"] = True
+        return result
     try:
         stock = yf.Ticker(ticker)
         expirations = stock.options
@@ -761,7 +863,7 @@ def fetch_options_chain(ticker: str, current_price: Optional[float] = None) -> D
             elif not puts.empty:
                 idx = (puts["strike"] - spot).abs().idxmin()
                 atm_strike = float(puts.loc[idx, "strike"])
-        return {
+        result = {
             "ticker": ticker,
             "expirations": list(expirations),
             "nearest_expiry": nearest,
@@ -776,14 +878,34 @@ def fetch_options_chain(ticker: str, current_price: Optional[float] = None) -> D
             "put_call_ratio": len(puts) / len(calls) if len(calls) > 0 else None,
             "calls": _option_contracts(calls, spot),
             "puts": _option_contracts(puts, spot),
+            "source": "yfinance_options",
+            "fetched_at": _now_str(),
+            "as_of": _now_str(),
+            "from_cache": False,
         }
+        cache.set(cache_key, "info", result, ttl=60)
+        return result
     except Exception as e:
         return {"error": str(e)}
 
 
-def fetch_trading_session_ranges(ticker: str) -> Dict[str, Any]:
+def fetch_trading_session_ranges(ticker: str, force_refresh: bool = False) -> Dict[str, Any]:
+    cache_key = f"session_ranges_v2_{ticker}"
+    cached = None if force_refresh else cache.get(cache_key, "info", ttl=60)
+    if cached is not None:
+        result = dict(cached)
+        result["from_cache"] = True
+        return result
     try:
-        return get_session_ranges(yf.Ticker(ticker))
+        result = get_session_ranges(yf.Ticker(ticker))
+        result["fetched_at"] = _now_str()
+        result["as_of"] = max(
+            (session.get("end_time") for session in result.get("sessions", {}).values() if session.get("end_time")),
+            default=None,
+        )
+        result["from_cache"] = False
+        cache.set(cache_key, "info", result, ttl=60)
+        return result
     except Exception as exc:
         return {"error": str(exc), "sessions": {}}
 
@@ -821,7 +943,7 @@ def _option_contracts(chain: Any, spot: Optional[float], limit: int = 12) -> lis
 
 
 def _select_option_expiry(expirations: Any, minimum_days: int = 21) -> str:
-    today = date.today()
+    today = datetime.now(EASTERN).date()
     for expiry in expirations:
         try:
             if (datetime.strptime(expiry, "%Y-%m-%d").date() - today).days >= minimum_days:

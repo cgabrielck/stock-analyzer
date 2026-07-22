@@ -34,3 +34,15 @@ def test_batch_news_isolates_ticker_failures(monkeypatch) -> None:
     assert result["AAPL"]["status"] == "ok"
     assert result["BAD"]["status"] == "error"
     assert result["MSFT"]["status"] == "ok"
+
+
+def test_impact_cache_key_changes_with_content_and_stable_earnings_context() -> None:
+    article = {"id": "1", "title": "Title", "summary": "Summary", "published_at": "2026-07-22T00:00:00Z"}
+    earnings = {"available": True, "date_start": "2026-07-30", "date_end": "2026-07-30", "days_until": 8, "source": "yahoo"}
+
+    first = picks_news._impact_cache_key("AAPL", article, earnings, "en")
+    updated = picks_news._impact_cache_key("AAPL", {**article, "summary": "Updated"}, earnings, "en")
+    next_day = picks_news._impact_cache_key("AAPL", article, {**earnings, "days_until": 7}, "en")
+
+    assert first != updated
+    assert first == next_day

@@ -25,12 +25,13 @@ def run_our_picks_validation(
     holding_days: int = 20,
     transaction_cost_bps: float = 15.0,
     slippage_bps: float = 5.0,
+    force_refresh: bool = False,
 ) -> Dict[str, Any]:
     try:
         from agents.deep_research import _build_trade_plan, _short_term_score
 
         cache_key = f"our_picks_validation_v2_{ticker}_{holding_days}_{transaction_cost_bps}_{slippage_bps}"
-        if history is None and benchmark is None:
+        if history is None and benchmark is None and not force_refresh:
             cached = cache.get(cache_key, "info", ttl=21600)
             if cached:
                 return cached

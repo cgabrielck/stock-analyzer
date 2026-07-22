@@ -173,7 +173,7 @@ def _parse_timestamp(value: Any) -> Optional[datetime]:
 def _is_current_candidate(candidate: Dict[str, Any], now: datetime, info: Dict[str, Any], state: str) -> bool:
     quote_time = candidate.get("time")
     if quote_time is None:
-        return state in {"PRE", "PREPRE", "REGULAR", "POST", "POSTPOST"}
+        return False
     delay_minutes = float(info.get("exchangeDataDelayedBy") or 0)
     allowed_age_seconds = max(900.0, delay_minutes * 60 + 300.0)
     age_seconds = (now - quote_time).total_seconds()

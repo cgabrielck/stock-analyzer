@@ -14,7 +14,7 @@ def calculate_growth_score(
 
     w = custom_weights if custom_weights is not None else SCORING_WEIGHTS
 
-    if data.get("revenue_growth") is not None and data["revenue_growth"] != 0:
+    if data.get("revenue_growth") is not None:
         raw = data["revenue_growth"]
         s = min(max((raw / 20.0) * 100, 0), 100)
         score += s * w.get("revenue_growth", 0)
@@ -22,7 +22,7 @@ def calculate_growth_score(
         details["营收增长 (YoY)"] = {"value": f"{raw:.1f}%", "score": f"{s:.0f}/100"}
         metrics_used += 1
 
-    if data.get("eps_growth") is not None and data["eps_growth"] != 0:
+    if data.get("eps_growth") is not None:
         raw = data["eps_growth"]
         s = min(max((raw / 20.0) * 100, 0), 100)
         score += s * w.get("eps_growth", 0)

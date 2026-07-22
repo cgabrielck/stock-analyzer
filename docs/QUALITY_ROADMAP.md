@@ -102,7 +102,7 @@ Implemented:
 
 ## Phase 2: Data Trust and Freshness
 
-Status: **Planned**
+Status: **Completed on 2026-07-22**
 
 - Add source, as-of time, fetched time, stale state, and fallback metadata.
 - Preserve the real snapshot date for seed data.
@@ -111,6 +111,21 @@ Status: **Planned**
 - Fix short-ticker news relevance and add a freshness cutoff.
 - Normalize earnings dates to the exchange timezone.
 - Include content and event hashes in analysis cache keys.
+
+Implemented:
+
+- All fundamental paths return a versioned data-quality contract with source type, retrieval time, data as-of time, cache/fallback/stale flags, metric coverage, and source components.
+- Historical seed snapshots preserve their original observation time and are explicitly stale.
+- Legitimate zero growth, margin, ROE, and debt/equity values count as available metrics; PEG still requires a positive value.
+- Active-session quotes without timestamps are marked stale.
+- Technical caches are isolated by ticker and requested period and expose source/as-of/cache metadata.
+- Deep force refresh propagates to options, session ranges, news, and on-demand validation.
+- Options and session ranges have 60-second caches with provenance metadata.
+- News is limited to seven days and rejects missing or implausibly future timestamps.
+- Short ticker matching requires structured symbols or distinctive company names.
+- News impact cache keys include content, event context, language, model, prompt, and schema fingerprints.
+- Earnings dates and option DTE use America/New_York calendar semantics.
+- Deep Analysis and Picks News display source, as-of time, cutoff, cache/fallback, and seed warnings.
 
 Acceptance criteria:
 

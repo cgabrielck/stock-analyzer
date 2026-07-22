@@ -50,6 +50,20 @@ def test_score_partial_metrics() -> None:
     assert "营收增长 (YoY)" in details
 
 
+def test_zero_growth_is_valid_and_counts_against_score() -> None:
+    data = {
+        "ticker": "TEST", "revenue_growth": 0.0, "eps_growth": 0.0,
+        "profit_margin": None, "peg": None, "roe": None, "debt_equity": None,
+    }
+
+    score, details, metrics_used = calculate_growth_score(data)
+
+    assert score == 0
+    assert metrics_used == 2
+    assert details["营收增长 (YoY)"]["score"] == "0/100"
+    assert details["EPS增长 (YoY)"]["score"] == "0/100"
+
+
 def test_peg_scoring() -> None:
     data = {
         "ticker": "TEST",

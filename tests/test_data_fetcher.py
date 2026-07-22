@@ -4,7 +4,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 from agents import data_fetcher
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
+import pandas as pd
 
 
 class _Response:
@@ -62,3 +63,85 @@ def test_calendar_dates_support_current_dict_shape() -> None:
 def test_news_relevance_rejects_unrelated_company_story() -> None:
     assert data_fetcher._news_is_relevant("AAPL", "Apple raises guidance", "") is True
     assert data_fetcher._news_is_relevant("AAPL", "Zhongji seeks Hong Kong listing", "China optical company") is False
+
+
+def test_zero_metrics_count_as_available_except_invalid_peg() -> None:
+    metrics = {"revenue_growth": 0, "eps_growth": 0, "profit_margin": 0, "roe": 0, "debt_equity": 0, "peg": 0}
+
+    assert data_fetcher._count_available_metrics(metrics) == 5
+
+
+def test_seed_as_of_preserves_historical_snapshot_time() -> None:
+    value = data_fetcher._seed_as_of({"fetched_at": "2026-07-20 15:23:12"})
+
+    assert value.startswith("2026-07-20T15:23:12")
+
+
+def test_short_ticker_requires_company_name_or_structured_symbol() -> None:
+    assert data_fetcher._news_is_relevant("V", "Visa raises guidance", "") is True
+    assert data_fetcher._news_is_relevant("V", "Version V launches", "") is False
+    assert data_fetcher._news_is_relevant("V", "$V raises guidance", "") is True
+    assert data_fetcher._news_is_relevant("MA", "John Ma joins board", "") is False
+    assert data_fetcher._news_is_relevant("MA", "Mastercard expands network", "") is True
+
+
+def test_news_cutoff_filters_old_missing_and_future_articles(monkeypatch) -> None:
+    now = datetime(2026, 7, 22, 12, tzinfo=timezone.utc)
+
+    class FakeTicker:
+        @property
+        def news(self):
+            return [
+                {"content": {"id": "fresh", "title": "Apple fresh update", "pubDate": "2026-07-21T12:00:00Z"}},
+                {"content": {"id": "old", "title": "Apple old update", "pubDate": "2026-07-01T12:00:00Z"}},
+                {"content": {"id": "missing", "title": "Apple missing time"}},
+                {"content": {"id": "future", "title": "Apple future update", "pubDate": "2026-07-23T12:00:00Z"}},
+            ]
+
+    monkeypatch.setattr(data_fetcher.yf, "Ticker", lambda *args, **kwargs: FakeTicker())
+    result = data_fetcher.fetch_news("AAPL", force_refresh=True, now=now)
+
+    assert [item["id"] for item in result] == ["fresh"]
+
+
+def test_earnings_aware_timestamp_uses_eastern_calendar_date() -> None:
+    value = data_fetcher._earnings_date_et(pd.Timestamp("2026-07-23 02:00", tz="UTC"))
+
+    assert value.isoformat() == "2026-07-22"
+
+
+def test_earnings_today_is_included_with_zero_days() -> None:
+    today = date(2026, 7, 22)
+
+    result = data_fetcher._earnings_result([today], "test", today=today)
+
+    assert result["days_until"] == 0
+
+
+def test_options_cache_and_force_refresh(monkeypatch) -> None:
+    calls = []
+    frame = pd.DataFrame([{
+        "contractSymbol": "TEST260821C00100000", "strike": 100.0, "bid": 2.0, "ask": 2.2,
+        "lastPrice": 2.1, "volume": 100, "openInterest": 500,
+        "impliedVolatility": 0.25, "inTheMoney": False,
+    }])
+
+    class Chain:
+        calls = frame
+        puts = frame
+
+    class FakeTicker:
+        options = ["2026-08-21"]
+
+        def option_chain(self, expiry):
+            calls.append(expiry)
+            return Chain()
+
+    monkeypatch.setattr(data_fetcher.yf, "Ticker", lambda *args, **kwargs: FakeTicker())
+    data_fetcher.cache.delete("options_v2_TEST_100.0", "info")
+
+    data_fetcher.fetch_options_chain("TEST", 100)
+    data_fetcher.fetch_options_chain("TEST", 100)
+    data_fetcher.fetch_options_chain("TEST", 100, force_refresh=True)
+
+    assert len(calls) == 2

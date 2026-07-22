@@ -1,8 +1,10 @@
 from datetime import datetime, timezone
+import hashlib
+import json
 from typing import Any, Callable, Dict, List, Optional
 
 from agents.data_fetcher import fetch_news, fetch_next_earnings
-from agents.llm_agent import analyze_news_impact
+from agents.llm_agent import analyze_news_impact, get_model_for_task
 from utils.cache import cache
 
 
@@ -51,7 +53,7 @@ def analyze_ticker_news(
     for article in items:
         item = dict(article)
         if include_ai:
-            impact_key = f"news_impact_v1_{ticker}_{item.get('id', '')}_{lang}"
+            impact_key = _impact_cache_key(ticker, item, earnings, lang)
             impact = None if force_refresh else cache.get(impact_key, "info", ttl=21600)
             if impact is None:
                 impact = analyze_news_impact(ticker, item, earnings=earnings, lang=lang)
@@ -78,7 +80,28 @@ def analyze_ticker_news(
         "status": status,
         "errors": errors,
         "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "news_cutoff_at": min((item.get("cutoff_at") for item in items if item.get("cutoff_at")), default=None),
+        "earnings_source": earnings.get("source"),
     }
+
+
+def _impact_cache_key(ticker: str, article: Dict[str, Any], earnings: Dict[str, Any], lang: str) -> str:
+    payload = {
+        "prompt_version": "news-impact-2026-07-v2",
+        "schema_version": 2,
+        "model": get_model_for_task("news_impact"),
+        "ticker": ticker.upper(),
+        "lang": lang,
+        "article": {
+            key: article.get(key) for key in ("id", "title", "summary", "publisher", "published_at", "link")
+        },
+        "earnings": {
+            key: earnings.get(key) for key in ("available", "date_start", "date_end", "precision", "source")
+        },
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24]
+    return f"news_impact_v2_{ticker}_{digest}"
 
 
 def _fallback_impact(article: Dict[str, Any], lang: str) -> Dict[str, Any]:

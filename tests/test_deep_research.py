@@ -190,3 +190,29 @@ def test_market_data_timeout_keeps_core_result(monkeypatch) -> None:
     assert result["ticker"] == "AAPL"
     assert result["options"]["error"] == "provider_timeout"
     assert result["trade_plan"]["action"] == "buy"
+
+
+def test_force_refresh_propagates_to_enrichment_providers(monkeypatch) -> None:
+    calls = {}
+    stock = {"ticker": "AAPL", "growth_score": 70, "risk_penalty": 0, "metrics_used": 6}
+    technical = {"technical_score": 70, "price": 100, "risk_metrics": {"available": False}}
+    def options(*args, **kwargs):
+        calls["options"] = kwargs.get("force_refresh")
+        return {"error": "none"}
+
+    def sessions(*args, **kwargs):
+        calls["sessions"] = kwargs.get("force_refresh")
+        return {"sessions": {}}
+
+    def news(*args, **kwargs):
+        calls["news"] = kwargs.get("force_refresh")
+        return []
+
+    monkeypatch.setattr(deep_research, "fetch_options_chain", options)
+    monkeypatch.setattr(deep_research, "fetch_trading_session_ranges", sessions)
+    monkeypatch.setattr(deep_research, "fetch_news", news)
+    monkeypatch.setattr(deep_research, "suggest_trading_strategy", lambda *args, **kwargs: {"reasoning": "ok"})
+
+    deep_research.analyze_selected_stock(stock, technical=technical, force_refresh=True)
+
+    assert calls == {"options": True, "sessions": True, "news": True}

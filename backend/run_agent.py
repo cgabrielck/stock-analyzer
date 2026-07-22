@@ -77,10 +77,10 @@ def print_recommendation(rec: Dict[str, Any], index: int, lang: str) -> None:
         print(f"     {label:20s}: {value}")
 
     extra = [
-        (t("metric.beta", lang), f"{rec.get('beta', 0):.2f}" if rec.get("beta") else "N/A"),
-        (t("metric.div_yield", lang), f"{rec.get('dividend_yield', 0)*100:.2f}%" if rec.get("dividend_yield") else "N/A"),
+        (t("metric.beta", lang), f"{rec.get('beta', 0):.2f}" if rec.get("beta") is not None else "N/A"),
+        (t("metric.div_yield", lang), f"{rec.get('dividend_yield', 0)*100:.2f}%" if rec.get("dividend_yield") is not None else "N/A"),
         (t("metric.rating", lang), rec.get("rating_label") or "N/A"),
-        (t("metric.inst_own", lang), f"{rec.get('held_percent_institutions', 0)*100:.1f}%" if rec.get("held_percent_institutions") else "N/A"),
+        (t("metric.inst_own", lang), f"{rec.get('held_percent_institutions', 0)*100:.1f}%" if rec.get("held_percent_institutions") is not None else "N/A"),
     ]
     print()
     for label, value in extra:

@@ -149,7 +149,8 @@ def _inject_apple_css() -> None:
     .stSlider [role="slider"] { background:var(--cyan) !important; border:2px solid var(--panel) !important; }
     .stAlert { background:var(--panel-2); border:1px solid var(--line-hot); border-radius:7px; color:var(--text); font-size:.78rem; }
     .stock-tag { display:inline-flex; align-items:center; background:var(--panel-2); border:1px solid var(--line-hot); border-radius:4px; padding:3px 8px; color:var(--text); font-family:var(--mono); font-size:.68rem; font-weight:700; margin:2px; }
-    .st-key-mobile_quick_start { display:none; }
+    .st-key-primary_analysis_action { display:block; max-width:420px; margin:.2rem 0 1rem; padding:0 !important; border:0 !important; background:transparent !important; }
+    .st-key-primary_analysis_action .stButton > button { min-height:48px; width:100%; font-size:.88rem; }
 
     @media (max-width: 1024px) { .main > div { padding:1rem; } .app-title{font-size:1.65rem;} }
     @media (max-width: 768px) {
@@ -158,9 +159,9 @@ def _inject_apple_css() -> None:
         .app-title { font-size:1.45rem; }
         .app-subtitle { font-size:.7rem; }
         .terminal-live { font-size:.6rem; }
-        .st-key-mobile_quick_start { display:block; margin:0 0 1rem; padding:0 !important; border:0 !important; background:transparent !important; box-shadow:none !important; }
-        .st-key-mobile_quick_start .stButton { margin:0; }
-        .st-key-mobile_quick_start .stButton > button { width:100%; min-height:56px; font-size:1rem; letter-spacing:.02em; box-shadow:0 0 24px rgba(34,211,197,.22); }
+        .st-key-primary_analysis_action { max-width:none; margin:0 0 1rem; }
+        .st-key-primary_analysis_action .stButton { margin:0; }
+        .st-key-primary_analysis_action .stButton > button { width:100%; min-height:56px; font-size:1rem; letter-spacing:.02em; box-shadow:0 0 24px rgba(34,211,197,.22); }
         .rec-card { min-height:0; padding:.8rem; }
         .stTabs [data-baseweb="tab-list"] { position:sticky; top:0; z-index:20; background:rgba(7,11,18,.94); backdrop-filter:blur(12px); padding:.45rem 0; }
         .stTabs [data-baseweb="tab"] { font-size:.67rem; padding:.48rem .62rem; min-height:42px; }
@@ -170,8 +171,9 @@ def _inject_apple_css() -> None:
         .stDataFrame { max-height:70vh; }
         [data-testid="stSidebarCollapsedControl"] { position:fixed !important; top:.65rem !important; left:.65rem !important; z-index:999999 !important; width:auto !important; }
         [data-testid="stSidebarCollapsedControl"] button { width:132px !important; height:46px !important; padding:0 14px !important; border:2px solid var(--cyan) !important; border-radius:8px !important; background:linear-gradient(135deg,#123b3b,#0d2027) !important; color:var(--cyan) !important; box-shadow:0 0 24px rgba(34,211,197,.3) !important; }
-        [data-testid="stSidebarCollapsedControl"] button::after { content:"⚙  SETTINGS"; color:var(--cyan); font:750 .72rem var(--mono); letter-spacing:.06em; white-space:nowrap; }
-        [data-testid="stSidebarCollapsedControl"] button svg { width:18px !important; height:18px !important; margin-right:6px; }
+        [data-testid="stSidebarCollapsedControl"] button::before { content:""; width:20px; height:16px; margin-right:8px; background:linear-gradient(var(--cyan),var(--cyan)) 0 2px/20px 2px no-repeat,linear-gradient(var(--cyan),var(--cyan)) 0 7px/20px 2px no-repeat,linear-gradient(var(--cyan),var(--cyan)) 0 12px/20px 2px no-repeat; }
+        [data-testid="stSidebarCollapsedControl"] button::after { content:"PARAMETERS"; color:var(--cyan); font:750 .72rem var(--mono); letter-spacing:.05em; white-space:nowrap; }
+        [data-testid="stSidebarCollapsedControl"] button svg { display:none !important; }
         section[data-testid="stSidebar"] { min-width:0; }
     }
 </style>"""
@@ -272,7 +274,7 @@ def build_sidebar() -> Dict[str, Any]:
     with add_col2:
         add_clicked = st.button(t("sidebar.custom_add", selected_lang), width="stretch", key="add_custom_btn")
     with add_col3:
-        clear_custom = st.button("🗑", width="stretch", key="clear_custom_btn")
+        clear_custom = st.button("", width="stretch", key="clear_custom_btn")
 
     if add_clicked and bulk_tickers.strip():
         extra = [t_.strip().upper() for t_ in bulk_tickers.replace("\n", ",").split(",") if t_.strip()]
@@ -301,7 +303,7 @@ def build_sidebar() -> Dict[str, Any]:
             with col_a:
                 st.markdown(f"<span style='font-size:0.75rem;'>{t_}</span>", unsafe_allow_html=True)
             with col_b:
-                if st.button("✕", key=f"remove_{t_}", help=t("sidebar.custom_remove", selected_lang), width="stretch"):
+                if st.button("Remove", key=f"remove_{t_}", help=t("sidebar.custom_remove", selected_lang), width="stretch"):
                     st.session_state.custom_tickers.remove(t_)
                     _save_custom_tickers(st.session_state.custom_tickers)
                     st.rerun()
@@ -341,7 +343,7 @@ def build_sidebar() -> Dict[str, Any]:
     use_llm = st.session_state.get("use_llm", False)
     if use_llm:
         st.sidebar.markdown(
-            f'<div class="sidebar-section">🤖 LLM {t("sidebar.weights", selected_lang)}</div>',
+            f'<div class="sidebar-section"> LLM {t("sidebar.weights", selected_lang)}</div>',
             unsafe_allow_html=True)
         llm_w = st.sidebar.slider(
             t("sidebar.llm_weight", selected_lang, default=20),
@@ -352,7 +354,7 @@ def build_sidebar() -> Dict[str, Any]:
         params["llm_weight"] = llm_w / 100.0
         st.sidebar.caption(t("sidebar.llm_hint", selected_lang))
 
-    st.sidebar.markdown(f'<div class="sidebar-section">📁 {t("portfolio.title", selected_lang)}</div>', unsafe_allow_html=True)
+    st.sidebar.markdown(f'<div class="sidebar-section">{t("portfolio.title", selected_lang)}</div>', unsafe_allow_html=True)
     portfolio_capital = st.sidebar.number_input(
         t("portfolio.capital", selected_lang),
         min_value=1000, max_value=10_000_000, value=100_000, step=10_000,
@@ -361,12 +363,11 @@ def build_sidebar() -> Dict[str, Any]:
     params["portfolio_capital"] = portfolio_capital
 
     st.sidebar.markdown("<hr style='margin:1.2rem 0;'>", unsafe_allow_html=True)
-    col1, col2, col3 = st.sidebar.columns([1, 1, 1])
+    params["run_clicked"] = False
+    col1, col2 = st.sidebar.columns(2)
     with col1:
-        params["run_clicked"] = st.button(t("sidebar.start", selected_lang), type="primary", width="stretch")
-    with col2:
         params["force_refresh"] = st.checkbox(t("sidebar.refresh", selected_lang), value=True, key="force_refresh_cb")
-    with col3:
+    with col2:
         if st.button(t("sidebar.clear_cache", selected_lang), type="secondary", width="stretch"):
             from utils.cache import cache
             cache.clear()
@@ -389,13 +390,13 @@ def show_source_health() -> None:
         for source, info in sorted(health.items()):
             total = info.get("success", 0) + info.get("failure", 0)
             rate = info.get("success", 0) / total * 100 if total > 0 else 0
-            icon = "✅" if rate >= 80 else "⚠️" if rate >= 50 else "❌"
+            icon = "" if rate >= 80 else "" if rate >= 50 else ""
             st.sidebar.markdown(
                 f"<div style='font-size:0.7rem;margin:1px 0;'>{icon} {source} — {rate:.0f}%</div>",
                 unsafe_allow_html=True)
         from agents.data_fetcher import _SEED_DATA
         _seed_count = len(_SEED_DATA)
-        _seed_txt = f"🐢 seed={_seed_count}" if _seed_count else "🐢 seed=0 ⚠️"
+        _seed_txt = f" seed={_seed_count}" if _seed_count else " seed=0 "
         st.sidebar.caption(_seed_txt)
         st.sidebar.caption(t("sidebar.last_update", lang, time=pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")))
         st.sidebar.caption(t("sidebar.data_from", lang))
@@ -471,10 +472,10 @@ def run_analysis(params: Dict[str, Any]) -> None:
             ))
 
     debug_all = results.get("_debug_all_data", {})
-    with st.expander("🐛 Debug", expanded=False):
+    with st.expander(" Debug", expanded=False):
         sd = len(st.session_state.scored_data)
         ad = len(debug_all)
-        st.write(f"🔄 Pipeline: selected={len(params.get('selected_tickers', []))} → fetched={ad} → scored={sd} → ranked={len(st.session_state.all_rankings)}")
+        st.write(f" Pipeline: selected={len(params.get('selected_tickers', []))} → fetched={ad} → scored={sd} → ranked={len(st.session_state.all_rankings)}")
         if debug_all:
             skipped = []
             for k, v in debug_all.items():
@@ -486,7 +487,7 @@ def run_analysis(params: Dict[str, Any]) -> None:
                 st.error(f"Skipped {len(skipped)} stocks:")
                 for s in skipped:
                     st.write(f"  - {s}")
-        st.write(f"📊 Health keys: {len(results.get('source_health', {}))}")
+        st.write(f" Health keys: {len(results.get('source_health', {}))}")
 
 
 def _find_local_extrema(series, window: int = 5):
@@ -678,11 +679,11 @@ def _strategy_fail_warning(strategy_id: str, tech_data: Dict[str, Any]) -> str:
     if strategy_id == "breakout_momentum":
         vol_ratio = tech_data.get("volume_ratio_10_50")
         if vol_ratio and vol_ratio < 1.2:
-            msg = "⚠ 突破策略在量能 < 1.2× 均量時有 ~60% 假突破率。確認放量再進。"
+            msg = " 突破策略在量能 < 1.2× 均量時有 ~60% 假突破率。確認放量再進。"
     elif strategy_id == "mean_reversion":
         rsi = tech_data.get("rsi_14")
         if rsi and rsi < 20:
-            msg = "⚠ V 型反彈中均值回歸策略有 ~40% 鞭打率。等待第二隻腳確認。"
+            msg = " V 型反彈中均值回歸策略有 ~40% 鞭打率。等待第二隻腳確認。"
     return msg
 
 
@@ -724,7 +725,7 @@ def render_recommendations_tab() -> None:
             sec_name = _sector_name(rec.get("sector", ""), lang)
             name = _stock_name(rec, lang)
             signal = rec.get("llm_key_signal", "")
-            signal_emoji = {"bullish": "🟢", "neutral": "🟡", "bearish": "🔴"}.get(signal, "")
+            signal_emoji = {"bullish": "", "neutral": "", "bearish": ""}.get(signal, "")
             signal_html = f"""<p style="font-size:0.7rem;margin:2px 0 0;color:#86868b;">
                 {t('llm.signal', lang)}: {signal_emoji} {t('llm.signal_' + signal, lang) if signal else ''}
             </p>""" if signal else ""
@@ -755,7 +756,7 @@ def render_recommendations_tab() -> None:
         sec_cn = _sector_name(rec.get("sector", ""), lang)
 
         with st.expander(
-            f"📌 **#{i+1} {rec['ticker']} — {name}**"
+            f" **#{i+1} {rec['ticker']} — {name}**"
             f" ({sec_cn}) | {t('recommend.score', lang, s=rec.get('total_score', 0))}"
         ):
             mcol1, mcol2, mcol3 = st.columns(3)
@@ -765,13 +766,13 @@ def render_recommendations_tab() -> None:
                 if price_val:
                     session_badge = ""
                     if price_session == "Pre-Market Trading":
-                        session_badge = "🟢"
+                        session_badge = ""
                     elif price_session == "After-Hours Trading":
-                        session_badge = "🟣"
+                        session_badge = ""
                     elif price_session == "Overnight Trading":
-                        session_badge = "🔵"
+                        session_badge = ""
                     elif price_session == "Regular Trading Hours":
-                        session_badge = "🟢"
+                        session_badge = ""
                     price_label = f"${price_val:.2f}"
                     st.metric(t("metric.price", lang), price_label)
                     badge = ""
@@ -790,11 +791,11 @@ def render_recommendations_tab() -> None:
                             ft = _dt.strptime(fetched[:19], "%Y-%m-%d %H:%M:%S")
                             mins_ago = (_dt.now() - ft).total_seconds() / 60
                             if mins_ago < 5:
-                                dot = "🟢"
+                                dot = ""
                             elif mins_ago < 30:
-                                dot = "🟡"
+                                dot = ""
                             else:
-                                dot = "🔴"
+                                dot = ""
                             badge += f" <span style='font-size:0.7rem;color:#86868b;'>{dot} {fetched[:16]}</span>"
                         except ValueError:
                             pass
@@ -831,7 +832,7 @@ def render_recommendations_tab() -> None:
                     _v = _rs_data["vs_spy_pct"]
                     _c = "color:#22c55e" if _v > 0 else "color:#ef4444"
                     st.markdown(
-                        f"<span style='font-size:0.7rem;{_c};'>📊 vs SPY: {'+' if _v > 0 else ''}{_v:.1f}%"
+                        f"<span style='font-size:0.7rem;{_c};'> vs SPY: {'+' if _v > 0 else ''}{_v:.1f}%"
                         + (f" | vs 板塊: {'+' if _rs_data.get('vs_sector_pct', 0) > 0 else ''}{_rs_data.get('vs_sector_pct', 0):.1f}%"
                            if _rs_data.get("vs_sector_pct") is not None else "")
                         + "</span>",
@@ -892,7 +893,7 @@ def render_recommendations_tab() -> None:
                 llm_score = rec.get("llm_score")
                 fund_score = rec.get("growth_score")
                 key_signal = rec.get("llm_key_signal", "neutral")
-                sig_emoji = {"bullish": "🟢", "neutral": "🟡", "bearish": "🔴"}.get(key_signal, "")
+                sig_emoji = {"bullish": "", "neutral": "", "bearish": ""}.get(key_signal, "")
                 sig_label = t(f"llm.signal_{key_signal}", lang)
                 st.subheader(t("llm.analysis", lang))
 
@@ -955,7 +956,7 @@ def render_recommendations_tab() -> None:
             price_result = st.session_state.get(f"price_result_{ticker}")
             if price_result:
                 if "error" in price_result:
-                    st.error(f"⚠️ {price_result['error']}")
+                    st.error(f" {price_result['error']}")
                 else:
                     st.markdown(f"**{t('price_suggest.btn', lang)}**")
                     pc1, pc2, pc3, pc4 = st.columns(4)
@@ -979,7 +980,7 @@ def render_recommendations_tab() -> None:
             opt_result = st.session_state.get(f"opt_result_{ticker}")
             if opt_result:
                 if "error" in opt_result:
-                    st.error(f"⚠️ {opt_result['error']}")
+                    st.error(f" {opt_result['error']}")
                 else:
                     st.markdown(f"**{t('options.btn', lang)}**")
                     ot = opt_result.get("option_type", "none")
@@ -1032,13 +1033,13 @@ def render_recommendations_tab() -> None:
             strat_result = st.session_state.get(strategy_key)
             if strat_result:
                 if "error" in strat_result:
-                    st.error(f"⚠️ {strat_result['error']}")
+                    st.error(f" {strat_result['error']}")
                 else:
                     cal = strat_result.get("calendar", {})
                     if cal.get("has_conflict"):
                         st.warning(cal["warning"])
                     regime = strat_result.get("regime", {})
-                    regime_str = f"📊 市況: {regime.get('trend', '?')} / {regime.get('volatility', '?')}波動"
+                    regime_str = f" 市況: {regime.get('trend', '?')} / {regime.get('volatility', '?')}波動"
                     rs = strat_result.get("relative_strength", {})
                     if rs.get("vs_spy_pct") is not None:
                         sp = rs["vs_spy_pct"]
@@ -1053,7 +1054,7 @@ def render_recommendations_tab() -> None:
                     rankings = strat_result.get("rankings", [])
 
                     if llm_data and llm_data.get("top_strategy"):
-                        st.markdown(f"**🤖 {t('strategy.llm_title', lang)}**")
+                        st.markdown(f"** {t('strategy.llm_title', lang)}**")
                         llm_sid = llm_data.get("top_strategy", "")
                         llm_name = t(f"strategy.{llm_sid}", lang) if llm_sid else ""
                         st.info(f"**{llm_name}** — {llm_data.get('reasoning', '')}")
@@ -1086,7 +1087,7 @@ def render_recommendations_tab() -> None:
                         st.markdown("<hr style='margin:0.5rem 0;'>", unsafe_allow_html=True)
 
                     if rankings:
-                        st.markdown(f"**📋 {t('strategy.title', lang)}**")
+                        st.markdown(f"** {t('strategy.title', lang)}**")
                         for rank_entry in rankings:
                             sid = rank_entry.get("id", "")
                             sname = t(rank_entry.get("name_key", ""), lang)
@@ -1112,7 +1113,7 @@ def render_recommendations_tab() -> None:
                                 st.caption(rank_entry["reasoning"])
 
                         st.markdown("<hr style='margin:0.5rem 0;'>", unsafe_allow_html=True)
-                        st.markdown(f"**🏆 {t('strategy.top_title', lang)}**")
+                        st.markdown(f"** {t('strategy.top_title', lang)}**")
 
                         if top:
                             if top.get("entry_price"):
@@ -1124,20 +1125,20 @@ def render_recommendations_tab() -> None:
                                     + (f" | **R:R** = {top.get('risk_reward', '?')}" if top.get('risk_reward') else "")
                                 )
                             if top.get("targets"):
-                                tgt_line = "  |  ".join([f"🎯 ${t['price']:.2f} (出 {t['size_pct']}%)" for t in top["targets"]])
+                                tgt_line = "  |  ".join([f" ${t['price']:.2f} (出 {t['size_pct']}%)" for t in top["targets"]])
                                 st.markdown(tgt_line)
                             pos_size = top.get("max_loss_usd", 0)
                             shares = top.get("shares", 0)
                             if pos_size or shares:
-                                st.caption(f"💵 {t('strategy.max_loss', lang)}: ${pos_size:.0f} ({t('strategy.shares', lang)} {shares})")
+                                st.caption(f" {t('strategy.max_loss', lang)}: ${pos_size:.0f} ({t('strategy.shares', lang)} {shares})")
                             conf_t = top.get("technical_confidence")
                             conf_f = top.get("fundamental_confidence")
                             conf_s = top.get("setup_quality")
                             if any([conf_t, conf_f, conf_s]):
                                 r1, r2, r3 = st.columns(3)
-                                r1.metric("📊 技術信心", f"{conf_t}%" if conf_t else "—")
-                                r2.metric("📈 基本面信心", f"{conf_f}%" if conf_f else "—")
-                                r3.metric("⚙ 型態品質", f"{conf_s}%" if conf_s else "—")
+                                r1.metric(" 技術信心", f"{conf_t}%" if conf_t else "—")
+                                r2.metric(" 基本面信心", f"{conf_f}%" if conf_f else "—")
+                                r3.metric(" 型態品質", f"{conf_s}%" if conf_s else "—")
                             sc = top.get("scenario", {})
                             if sc:
                                 with st.expander(t("strategy.scenario", lang)):
@@ -1174,7 +1175,7 @@ def render_recommendations_tab() -> None:
             if news:
                 st.subheader(t("recommend.news", lang))
                 for n in news:
-                    emoji = "✅" if n.get("sentiment") == "positive" else "❌" if n.get("sentiment") == "negative" else "➖"
+                    emoji = "" if n.get("sentiment") == "positive" else "" if n.get("sentiment") == "negative" else ""
                     st.markdown(f"{emoji} **{n.get('title', '')}**")
                     if n.get("summary"):
                         st.markdown(n["summary"])
@@ -1190,14 +1191,14 @@ def render_recommendations_tab() -> None:
             if insights:
                 llm_summary = insights.get("llm_summary")
                 if llm_summary and llm_summary.get("summary") and llm_summary["summary"] != "N/A":
-                    st.markdown(f"**📝 {_sector_name(rec.get('sector', ''), lang)} 摘要**")
+                    st.markdown(f"** {_sector_name(rec.get('sector', ''), lang)} 摘要**")
                     st.info(llm_summary["summary"])
                     if llm_summary.get("key_positives"):
                         for kp in llm_summary["key_positives"]:
-                            st.markdown(f"✅ {kp}")
+                            st.markdown(f" {kp}")
                     if llm_summary.get("key_risks"):
                         for kr in llm_summary["key_risks"]:
-                            st.markdown(f"⚠️ {kr}")
+                            st.markdown(f" {kr}")
                 else:
                     sections = insights.get("sections") or {}
                     if sections:
@@ -1470,7 +1471,7 @@ def render_news_tab() -> None:
     all_news.sort(key=lambda n: sentiment_order.get(n.get("sentiment", "neutral"), 1))
 
     for n in all_news:
-        emoji = "✅" if n.get("sentiment") == "positive" else "❌" if n.get("sentiment") == "negative" else "➖"
+        emoji = "" if n.get("sentiment") == "positive" else "" if n.get("sentiment") == "negative" else ""
         label = t("news.positive", lang) if n.get("sentiment") == "positive" else t("news.negative", lang) if n.get("sentiment") == "negative" else t("news.neutral", lang)
         with st.container(border=True):
             cols = st.columns([1, 6, 1])
@@ -1532,7 +1533,7 @@ def render_stock_pool_tab() -> None:
     lang = st.session_state.get("lang", "zh_tw")
     st.subheader(t("tab.pool", lang))
 
-    search = st.text_input("🔍", placeholder="Search ticker or name...", label_visibility="collapsed", key="pool_search")
+    search = st.text_input("", placeholder="Search ticker or name...", label_visibility="collapsed", key="pool_search")
 
     all_stocks = list(STOCK_UNIVERSE)
     custom = st.session_state.get("custom_tickers", [])
@@ -1553,20 +1554,18 @@ def render_stock_pool_tab() -> None:
             "Name": _stock_name(s, lang),
             "Sector": _sector_name(sec, lang),
             "Tier": t(f"universe.{s.get('universe_tier', 'satellite' if is_custom else 'core')}", lang),
-            "Custom": "⭐" if is_custom else "",
+            "Custom": "" if is_custom else "",
         })
 
     df = pd.DataFrame(rows)
     st.dataframe(df, hide_index=True, width="stretch", height=500)
 
-    st.subheader("📊 " + t("sidebar.stock_pool", lang))
+    st.subheader(" " + t("sidebar.stock_pool", lang))
     sec_counts = df.groupby("Sector").size().reset_index(name="Count")
     st.dataframe(sec_counts, hide_index=True, width="stretch")
 
 
 def render_home_tab(lang: str) -> None:
-    st.markdown(f"### {t('mobile.home_title', lang)}")
-    st.caption(t("mobile.home_desc", lang))
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.markdown(f"<div class='feature-card'><h3>01 · {t('app.feature1', lang)}</h3><p>{t('app.feature1.desc', lang)}</p></div>", unsafe_allow_html=True)
@@ -1577,7 +1576,6 @@ def render_home_tab(lang: str) -> None:
     with col4:
         st.markdown(f"<div class='feature-card'><h3>04 · {t('app.feature4', lang)}</h3><p>{t('app.feature4.desc', lang)}</p></div>", unsafe_allow_html=True)
 
-    st.info(t("mobile.advanced_hint", lang))
 
 
 def export_csv() -> None:
@@ -1862,7 +1860,7 @@ def render_backtest_tab(selected_tickers: Optional[List[str]] = None) -> None:
                     "Return %": f"{p.get('avg_return', ''):+.1f}" if p.get("avg_return") is not None else "",
                     "SPY %": f"{p.get('spy_return', ''):+.1f}" if p.get("spy_return") is not None else "",
                     "Alpha %": f"{p.get('alpha', ''):+.1f}" if p.get("alpha") is not None else "",
-                    "Beat": "✅" if p.get("beat_spy") else "❌",
+                    "Beat": "" if p.get("beat_spy") else "",
                 }
                 if not has_fund:
                     del row["Fund Score"]
@@ -1919,7 +1917,7 @@ def render_portfolio_tab() -> None:
         with st.expander(t("portfolio.high_corr", lang), expanded=True):
             st.caption(t("portfolio.high_corr_desc", lang))
             for t1, t2, val in high_corr:
-                st.warning(f"**{t1}** ↔ **{t2}**: ρ = {val:.3f}")
+                st.warning(f"**{t1}**  **{t2}**: ρ = {val:.3f}")
 
     stop_hit = [p for p in positions if p.get("stop_hit")]
     if stop_hit:
@@ -1965,7 +1963,7 @@ def render_portfolio_tab() -> None:
 
 
 def main() -> None:
-    st.set_page_config(page_title="Stock Analyzer", page_icon="📈", layout="wide")
+    st.set_page_config(page_title="Stock Analyzer", page_icon="", layout="wide")
     init_state()
     _inject_apple_css()
 
@@ -1997,21 +1995,19 @@ try {
 
     params = build_sidebar()
 
-    mobile_run_clicked = False
-    if not st.session_state.analysis_done:
-        with st.container(key="mobile_quick_start"):
-            mobile_run_clicked = st.button(
-                t("mobile.analyze_now", lang),
-                type="primary",
-                width="stretch",
-                key="mobile_run_analysis",
-            )
+    with st.container(key="primary_analysis_action"):
+        run_clicked = st.button(
+            t("sidebar.start", lang),
+            type="primary",
+            width="stretch",
+            key="primary_run_analysis",
+        )
 
     show_source_health()
     st.sidebar.markdown("<hr style='margin:1.2rem 0;'>", unsafe_allow_html=True)
     export_csv()
 
-    if params.get("run_clicked") or mobile_run_clicked:
+    if run_clicked:
         if not params.get("selected_tickers"):
             st.error(t("sidebar.select_stock", lang))
         else:

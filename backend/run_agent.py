@@ -35,7 +35,7 @@ def _lookup_stock(ticker: str) -> Dict[str, Any]:
 
 def print_header(lang: str) -> None:
     print("=" * 70)
-    print(f"  📈 {t('app.title', lang)} — CLI")
+    print(f"   {t('app.title', lang)} — CLI")
     print("  " + time.strftime("%Y-%m-%d %H:%M:%S"))
     print(f"  {t('sidebar.data_from', lang)}")
     print("=" * 70)
@@ -59,7 +59,7 @@ def print_recommendation(rec: Dict[str, Any], index: int, lang: str) -> None:
     name = _stock_name(rec, lang)
     sec = _sector_name(rec.get("sector", ""), lang)
     print(f"\n{'─' * 70}")
-    print(f"  🏆 {t('cli.rank', lang, i=index)}: {rec['ticker']} — {name}")
+    print(f"   {t('cli.rank', lang, i=index)}: {rec['ticker']} — {name}")
     print(f"     {t('cli.sector', lang)}: {sec}")
     print(f"     {t('recommend.score', lang, s=rec.get('total_score', 0))}")
     print(f"     {t('metric.price', lang)}: ${rec.get('price', 0):.2f}" if rec.get("price") else f"     {t('metric.price', lang)}: N/A")
@@ -110,19 +110,19 @@ def print_recommendation(rec: Dict[str, Any], index: int, lang: str) -> None:
 
 def print_summary(results: Dict[str, Any], lang: str) -> None:
     print(f"\n{'=' * 70}")
-    print(f"  📊 {t('ai.source_health', lang)}")
+    print(f"   {t('ai.source_health', lang)}")
     print(f"  {'─' * 66}")
 
     health = results.get("source_health", {})
     for source, info in sorted(health.items()):
         total = info.get("success", 0) + info.get("failure", 0)
         rate = info.get("success", 0) / total * 100 if total > 0 else 0
-        icon = "✅" if rate >= 80 else "⚠️" if rate >= 50 else "❌"
+        icon = "" if rate >= 80 else "" if rate >= 50 else ""
         print(f"  {icon} {source}: {rate:.0f}% {t('ai.rate', lang)} ({total} {t('cli.requests', lang)})")
 
     logs = results.get("upgrade_logs", [])
     if logs:
-        print(f"\n  🤖 {t('cli.recent_logs', lang, n=3)}:")
+        print(f"\n   {t('cli.recent_logs', lang, n=3)}:")
         for log in logs[-3:]:
             print(f"     • {log.get('message', '')}")
 
@@ -143,12 +143,12 @@ def main() -> None:
     print()
 
     if results.get("error"):
-        print(f"\n  ❌ {t('app.error', lang, msg=results['error'])}")
+        print(f"\n   {t('app.error', lang, msg=results['error'])}")
         sys.exit(1)
 
     recs = results.get("recommendations", [])
     if not recs:
-        print(f"\n  ⚠️ {t('cli.no_recs', lang)}")
+        print(f"\n   {t('cli.no_recs', lang)}")
         sys.exit(1)
 
     print(f"\n  {t('app.complete', lang, n=len(results.get('all_rankings', [])))}\n")

@@ -147,7 +147,7 @@ class AgentState:
         if new_issues:
             self._state.setdefault("detected_issues", []).extend(new_issues)
             for issue in new_issues:
-                self.log_upgrade(f"🔍 检测到问题: {issue}")
+                self.log_upgrade(f" 检测到问题: {issue}")
 
         resolved = [
             i for i in self._state.get("detected_issues", [])
@@ -157,7 +157,7 @@ class AgentState:
         if resolved:
             self._state.setdefault("resolved_issues", []).extend(resolved)
             for issue in resolved:
-                self.log_upgrade(f"✅ 问题已解决: {issue}")
+                self.log_upgrade(f" 问题已解决: {issue}")
 
         self._state["detected_issues"] = issues
 

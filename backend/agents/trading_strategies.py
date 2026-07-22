@@ -163,7 +163,7 @@ def _check_holding_window(cal: Dict[str, Any], holding_days: int) -> Dict[str, A
                 evt_date = datetime.strptime(val[:10], "%Y-%m-%d")
                 days_until = (evt_date - today).days
                 if 0 <= days_until <= holding_days:
-                    warnings.append(f"📅 持有期內有{label} ({val[:10]})")
+                    warnings.append(f" 持有期內有{label} ({val[:10]})")
                     cal["has_conflict"] = True
             except ValueError:
                 pass
@@ -374,7 +374,7 @@ def score_breakout_momentum(fundamental: Dict[str, Any],
         score += 25
         reasons.append(f"量能放大 ({vol_ratio:.1f}×) (+25)")
     elif vol_ratio and vol_ratio < 1.2:
-        reasons.append(f"⚠ 量能不足 ({vol_ratio:.1f}×)，假突破率高")
+        reasons.append(f" 量能不足 ({vol_ratio:.1f}×)，假突破率高")
         score -= 10
     rsi = technical.get("rsi_14")
     if rsi and 50 <= rsi <= 70:

@@ -543,181 +543,135 @@ def _find_local_extrema(series, window: int = 5):
     return local_max, local_min
 
 
-def _build_tech_chart(ticker: str, interval: str = "1d", lang: str = "zh_tw") -> Any:
+def _build_tech_chart(
+    ticker: str,
+    interval: str = "1d",
+    extended_hours: bool = False,
+    current_price: Optional[float] = None,
+) -> Dict[str, Any]:
+    from plotly.subplots import make_subplots
+    import plotly.graph_objects as go
+    from utils.chart_utils import fetch_chart_data
+
+    result = fetch_chart_data(ticker, interval, extended_hours)
+    if result.get("error"):
+        return result
     try:
-        import yfinance as yf
-        import plotly.graph_objects as go
-        from plotly.subplots import make_subplots
-        import pandas as pd
-        import numpy as np
-
-        stock = yf.Ticker(ticker)
-
-        interval_map = {
-            "1m":  ("1m", "5d"),
-            "5m":  ("5m", "1mo"),
-            "15m": ("15m", "1mo"),
-            "30m": ("30m", "1mo"),
-            "60m": ("60m", "2mo"),
-            "1d":  ("1d", "1y"),
-        }
-        yf_interval, yf_period = interval_map.get(interval, ("1d", "1y"))
-        is_intraday = yf_interval != "1d"
-
-        if is_intraday:
-            hist = stock.history(period=yf_period, interval=yf_interval, prepost=True)
-        else:
-            hist = stock.history(period=yf_period)
-
-        if hist is None or hist.empty or len(hist) < 10:
-            return None
-
-        df = hist.copy()
-        df.index = pd.to_datetime(df.index)
-
-        stock_info = stock.info
-        current_price = stock_info.get("preMarketPrice") or stock_info.get("postMarketPrice") or stock_info.get("currentPrice") or stock_info.get("regularMarketPrice")
-        current_price = float(current_price) if current_price else float(df["Close"].iloc[-1])
-
-        if is_intraday:
-            fig = make_subplots(
-                rows=2, cols=1, shared_xaxes=True,
-                vertical_spacing=0.04,
-                row_heights=[0.7, 0.3],
-                subplot_titles=(ticker, "Volume"),
-            )
-            fig.add_trace(go.Candlestick(
-                x=df.index, open=df["Open"], high=df["High"],
-                low=df["Low"], close=df["Close"], name="Price",
-            ), row=1, col=1)
-            fig.add_hline(y=current_price, line_dash="dash", line_color="blue",
-                          annotation_text=f"Now ${current_price:.2f}", row=1, col=1)
-
-            vol_colors = ["red" if c < o else "green" for o, c in zip(df["Open"], df["Close"])]
-            fig.add_trace(go.Bar(
-                x=df.index, y=df["Volume"], name="Volume", marker_color=vol_colors, opacity=0.5,
-            ), row=2, col=1)
-
-            local_max, local_min = _find_local_extrema(df["Close"], window=7)
-            max_pts = df[local_max]
-            min_pts = df[local_min]
-            fig.add_trace(go.Scatter(
-                x=max_pts.index, y=max_pts["High"], mode="markers",
-                marker=dict(symbol="triangle-down", size=10, color="red"),
-                name="High",
-            ), row=1, col=1)
-            fig.add_trace(go.Scatter(
-                x=min_pts.index, y=min_pts["Low"], mode="markers",
-                marker=dict(symbol="triangle-up", size=10, color="green"),
-                name="Low",
-            ), row=1, col=1)
-
-            fig.update_xaxes(rangeslider_visible=False, row=1, col=1)
-            fig.update_xaxes(rangeslider_visible=False, row=2, col=1)
-        else:
-            df["SMA20"] = df["Close"].rolling(20).mean()
+        df = result["data"].copy()
+        is_intraday = result["interval"] != "1d"
+        df["SMA20"] = df["Close"].rolling(20).mean()
+        df["EMA20"] = df["Close"].ewm(span=20, adjust=False).mean()
+        if not is_intraday:
             df["SMA50"] = df["Close"].rolling(50).mean()
-            df["EMA20"] = df["Close"].ewm(span=20).mean()
-            bb_mid = df["Close"].rolling(20).mean()
             bb_std = df["Close"].rolling(20).std()
-            df["BB_upper"] = bb_mid + bb_std * 2
-            df["BB_lower"] = bb_mid - bb_std * 2
+            df["BB_upper"] = df["SMA20"] + bb_std * 2
+            df["BB_lower"] = df["SMA20"] - bb_std * 2
             delta = df["Close"].diff()
-            gain = delta.where(delta > 0, 0.0)
-            loss = (-delta).where(delta < 0, 0.0)
-            avg_gain = gain.rolling(14).mean()
-            avg_loss = loss.rolling(14).mean()
-            rs = avg_gain / avg_loss.replace(0, float("nan"))
-            df["RSI"] = 100 - (100 / (1 + rs))
-            ema_fast = df["Close"].ewm(span=12).mean()
-            ema_slow = df["Close"].ewm(span=26).mean()
+            gain = delta.clip(lower=0).ewm(alpha=1 / 14, adjust=False).mean()
+            loss = (-delta.clip(upper=0)).ewm(alpha=1 / 14, adjust=False).mean()
+            df["RSI"] = 100 - (100 / (1 + gain / loss.replace(0, float("nan"))))
+            ema_fast = df["Close"].ewm(span=12, adjust=False).mean()
+            ema_slow = df["Close"].ewm(span=26, adjust=False).mean()
             df["MACD"] = ema_fast - ema_slow
-            df["MACD_signal"] = df["MACD"].ewm(span=9).mean()
+            df["MACD_signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
             df["MACD_hist"] = df["MACD"] - df["MACD_signal"]
 
-            fig = make_subplots(
-                rows=4, cols=1, shared_xaxes=True,
-                vertical_spacing=0.03,
-                row_heights=[0.5, 0.15, 0.15, 0.2],
-                subplot_titles=(ticker, "Volume", "RSI(14)", "MACD"),
-            )
-            fig.add_trace(go.Candlestick(
-                x=df.index, open=df["Open"], high=df["High"],
-                low=df["Low"], close=df["Close"], name="Price",
-            ), row=1, col=1)
-            fig.add_hline(y=current_price, line_dash="dash", line_color="blue",
-                          annotation_text=f"Now ${current_price:.2f}", row=1, col=1)
-            fig.add_trace(go.Scatter(
-                x=df.index, y=df["SMA20"], line=dict(color="orange", width=1), name="SMA20",
-            ), row=1, col=1)
-            fig.add_trace(go.Scatter(
-                x=df.index, y=df["SMA50"], line=dict(color="purple", width=1), name="SMA50",
-            ), row=1, col=1)
-            fig.add_trace(go.Scatter(
-                x=df.index, y=df["EMA20"], line=dict(color="blue", width=1, dash="dot"), name="EMA20",
-            ), row=1, col=1)
-            fig.add_trace(go.Scatter(
-                x=df.index, y=df["BB_upper"], line=dict(color="gray", width=1, dash="dash"), name="BB Upper",
-            ), row=1, col=1)
-            fig.add_trace(go.Scatter(
-                x=df.index, y=df["BB_lower"], line=dict(color="gray", width=1, dash="dash"), name="BB Lower",
-            ), row=1, col=1)
+        rows = 2 if is_intraday else 4
+        fig = make_subplots(
+            rows=rows, cols=1, shared_xaxes=True, vertical_spacing=0.025,
+            row_heights=[0.72, 0.28] if is_intraday else [0.52, 0.14, 0.14, 0.2],
+            subplot_titles=(ticker, "Volume") if is_intraday else (ticker, "Volume", "RSI(14)", "MACD"),
+        )
+        fig.add_trace(go.Candlestick(
+            x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"],
+            increasing_line_color="#34d399", decreasing_line_color="#fb7185", name="Price",
+        ), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df["SMA20"], line=dict(color="#fbbf24", width=1), name="SMA20"), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df["EMA20"], line=dict(color="#22d3c5", width=1), name="EMA20"), row=1, col=1)
+        if current_price and float(df["Low"].min()) * 0.8 <= current_price <= float(df["High"].max()) * 1.2:
+            fig.add_hline(y=current_price, line_dash="dash", line_color="#60a5fa", annotation_text=f"Now ${current_price:.2f}", row=1, col=1)
+        colors = ["#fb7185" if close < open_ else "#34d399" for open_, close in zip(df["Open"], df["Close"])]
+        fig.add_trace(go.Bar(x=df.index, y=df["Volume"], marker_color=colors, opacity=0.55, name="Volume"), row=2, col=1)
 
-            local_max, local_min = _find_local_extrema(df["Close"], window=10)
-            max_pts = df[local_max]
-            min_pts = df[local_min]
-            fig.add_trace(go.Scatter(
-                x=max_pts.index, y=max_pts["High"], mode="markers",
-                marker=dict(symbol="triangle-down", size=8, color="red"),
-                name="High",
-            ), row=1, col=1)
-            fig.add_trace(go.Scatter(
-                x=min_pts.index, y=min_pts["Low"], mode="markers",
-                marker=dict(symbol="triangle-up", size=8, color="green"),
-                name="Low",
-            ), row=1, col=1)
-
-            vol_colors = ["red" if c < o else "green" for o, c in zip(df["Open"], df["Close"])]
-            fig.add_trace(go.Bar(
-                x=df.index, y=df["Volume"], name="Volume", marker_color=vol_colors, opacity=0.5,
-            ), row=2, col=1)
-            fig.add_trace(go.Scatter(
-                x=df.index, y=df["RSI"], line=dict(color="purple", width=1), name="RSI",
-            ), row=3, col=1)
-            fig.add_hline(y=70, line_dash="dash", line_color="red", row=3, col=1)
-            fig.add_hline(y=30, line_dash="dash", line_color="green", row=3, col=1)
-            macd_colors = ["red" if v < 0 else "green" for v in df["MACD_hist"]]
-            fig.add_trace(go.Bar(
-                x=df.index, y=df["MACD_hist"], name="MACD Hist", marker_color=macd_colors, opacity=0.6,
-            ), row=4, col=1)
-            fig.add_trace(go.Scatter(
-                x=df.index, y=df["MACD"], line=dict(color="blue", width=1), name="MACD",
-            ), row=4, col=1)
-            fig.add_trace(go.Scatter(
-                x=df.index, y=df["MACD_signal"], line=dict(color="orange", width=1), name="Signal",
-            ), row=4, col=1)
+        if not is_intraday:
+            fig.add_trace(go.Scatter(x=df.index, y=df["SMA50"], line=dict(color="#a78bfa", width=1), name="SMA50"), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df["BB_upper"], line=dict(color="#64748b", width=1, dash="dot"), name="BB Upper"), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df["BB_lower"], line=dict(color="#64748b", width=1, dash="dot"), name="BB Lower"), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df["RSI"], line=dict(color="#a78bfa", width=1), name="RSI"), row=3, col=1)
+            fig.add_hline(y=70, line_dash="dot", line_color="#fb7185", row=3, col=1)
+            fig.add_hline(y=30, line_dash="dot", line_color="#34d399", row=3, col=1)
+            macd_colors = ["#fb7185" if value < 0 else "#34d399" for value in df["MACD_hist"]]
+            fig.add_trace(go.Bar(x=df.index, y=df["MACD_hist"], marker_color=macd_colors, opacity=0.55, name="MACD Hist"), row=4, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df["MACD"], line=dict(color="#60a5fa", width=1), name="MACD"), row=4, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df["MACD_signal"], line=dict(color="#fbbf24", width=1), name="Signal"), row=4, col=1)
 
         fig.update_layout(
-            height=700 if not is_intraday else 500,
-            xaxis_rangeslider_visible=False,
-            margin=dict(l=20, r=20, t=30, b=20),
-            hovermode="x unified",
-            showlegend=True, legend=dict(orientation="h", y=1.1),
-            template="plotly_white",
-            dragmode="drawline",
-            newshape=dict(line_color="cyan", line_width=2),
+            height=560 if is_intraday else 760, template="plotly_dark", paper_bgcolor="#0d1420",
+            plot_bgcolor="#0d1420", font=dict(color="#cbd5e1"), xaxis_rangeslider_visible=False,
+            margin=dict(l=12, r=12, t=45, b=15), hovermode="x unified", dragmode="pan",
+            showlegend=True, legend=dict(orientation="h", y=1.04, x=0),
         )
-        fig.update_yaxes(title_text="Price", row=1, col=1)
-        if not is_intraday:
-            fig.update_yaxes(title_text="Volume", row=2, col=1)
-            fig.update_yaxes(title_text="RSI", row=3, col=1)
-            fig.update_yaxes(title_text="MACD", row=4, col=1)
-        else:
-            fig.update_yaxes(title_text="Volume", row=2, col=1)
+        fig.update_xaxes(showgrid=True, gridcolor="rgba(126,145,168,.12)", rangeslider_visible=False)
+        fig.update_yaxes(showgrid=True, gridcolor="rgba(126,145,168,.12)", fixedrange=False)
+        if not extended_hours or not is_intraday:
+            fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
+        result["figure"] = fig
+        result["rows"] = len(df)
+        result["first_bar"] = df.index[0].isoformat()
+        result["last_bar"] = df.index[-1].isoformat()
+        return result
+    except Exception as exc:
+        return {**result, "error": f"{type(exc).__name__}: {exc}", "stage": "render"}
 
-        return fig
-    except Exception as e:
-        return None
+
+def _render_kline_chart(ticker: str, lang: str, key_prefix: str, current_price: Optional[float] = None) -> None:
+    intervals = ["1m", "5m", "15m", "30m", "60m", "1d"]
+    interval_labels = {"1m": "1 min", "5m": "5 min", "15m": "15 min", "30m": "30 min", "60m": "1 hour", "1d": t("chart.daily", lang)}
+    controls = st.columns([2, 2, 1])
+    with controls[0]:
+        interval = st.selectbox(
+            t("chart.interval", lang), intervals, format_func=lambda value: interval_labels[value],
+            index=5, key=f"{key_prefix}_interval",
+        )
+    with controls[1]:
+        session_mode = st.radio(
+            t("chart.session", lang), ["regular", "extended"], horizontal=True,
+            format_func=lambda value: t(f"chart.{value}", lang), key=f"{key_prefix}_session",
+            disabled=interval == "1d",
+        )
+    with controls[2]:
+        if st.button(t("chart.refresh", lang), key=f"{key_prefix}_refresh", width="stretch"):
+            from utils.chart_utils import fetch_chart_data
+            fetch_chart_data.clear()
+            st.rerun()
+
+    with st.spinner(t("chart.loading", lang)):
+        chart = _build_tech_chart(
+            ticker,
+            interval=interval,
+            extended_hours=session_mode == "extended" and interval != "1d",
+            current_price=current_price,
+        )
+    if chart.get("error"):
+        st.error(t("chart.error", lang, stage=chart.get("stage", "history"), msg=chart["error"]))
+        st.caption(t("chart.retry_hint", lang))
+        return
+    st.plotly_chart(
+        chart["figure"], width="stretch", theme=None, key=f"{key_prefix}_plot",
+        config={
+            "modeBarButtonsToAdd": ["drawline", "eraseshape"],
+            "modeBarButtonsToRemove": ["sendDataToCloud", "lasso2d", "select2d"],
+            "displayModeBar": True,
+            "displaylogo": False,
+            "scrollZoom": True,
+            "responsive": True,
+        },
+    )
+    st.caption(t(
+        "chart.metadata", lang, provider=chart.get("provider", "N/A"), rows=chart.get("rows", 0),
+        first=pd.Timestamp(chart["first_bar"]).strftime("%Y-%m-%d %H:%M ET"),
+        last=pd.Timestamp(chart["last_bar"]).strftime("%Y-%m-%d %H:%M ET"),
+    ))
 
 
 def _strategy_fail_warning(strategy_id: str, tech_data: Dict[str, Any]) -> str:
@@ -1266,34 +1220,7 @@ def render_recommendations_tab() -> None:
                 st.session_state[chart_visible_key] = not st.session_state.get(chart_visible_key, False)
 
             if st.session_state.get(chart_visible_key, False):
-                chart_interval_key = f"chart_interval_{ticker}"
-                intervals = ["1m", "5m", "15m", "30m", "60m", "1d"]
-                interval_labels = {"1m": "1min", "5m": "5min", "15m": "15min", "30m": "30min", "60m": "1hr", "1d": "Daily"}
-                default_idx = intervals.index("1d") if "1d" in intervals else 0
-                selected_interval = st.selectbox(
-                    t("chart.interval", lang), intervals,
-                    format_func=lambda x: interval_labels.get(x, x),
-                    key=chart_interval_key,
-                    index=intervals.index(st.session_state.get(f"chart_interval_last_{ticker}", "1d")),
-                )
-                st.session_state[f"chart_interval_last_{ticker}"] = selected_interval
-                with st.spinner(t("chart.loading", lang)):
-                    fig = _build_tech_chart(ticker, interval=selected_interval, lang=lang)
-                    if fig:
-                        st.plotly_chart(
-                            fig, width="stretch",
-                            config={
-                                "modeBarButtonsToAdd": [
-                                    "drawline", "drawopenpath", "drawcircle",
-                                    "drawrect", "eraseshape",
-                                ],
-                                "modeBarButtonsToRemove": ["sendDataToCloud"],
-                                "displayModeBar": True,
-                                "displaylogo": False,
-                            },
-                        )
-                    else:
-                        st.caption("No chart data available")
+                _render_kline_chart(ticker, lang, f"recommend_chart_{ticker}", rec.get("price"))
 
 
 def _render_deep_research_result(ticker: str, result: Dict[str, Any], lang: str) -> None:
@@ -1622,6 +1549,12 @@ def render_charts_tab() -> None:
 
     ticker_options = {r["ticker"]: f"{r['ticker']} — {_stock_name(r, lang)}" for r in recs}
     selected = st.selectbox(t("charts.select", lang), options=list(ticker_options.keys()), format_func=lambda t_: ticker_options[t_])
+
+    selected_rec = next((rec for rec in recs if rec["ticker"] == selected), {})
+    st.subheader(t("chart.title", lang))
+    _render_kline_chart(selected, lang, "charts_workspace", selected_rec.get("price"))
+    st.markdown("---")
+    st.subheader(t("charts.title", lang))
 
     from agents.data_fetcher import fetch_financials_history
     data = fetch_financials_history(selected)

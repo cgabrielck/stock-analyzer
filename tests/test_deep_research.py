@@ -48,6 +48,7 @@ def test_analyze_ticker_fetches_only_requested_stock(monkeypatch) -> None:
     monkeypatch.setattr(deep_research, "fetch_news", lambda *args, **kwargs: [])
     monkeypatch.setattr(deep_research, "fetch_options_chain", lambda *args, **kwargs: {"error": "none"})
     monkeypatch.setattr(deep_research, "fetch_trading_session_ranges", lambda *args, **kwargs: {"sessions": {}})
+    monkeypatch.setattr(deep_research, "run_our_picks_validation", lambda *args, **kwargs: {"available": True, "sample_count": 12})
     monkeypatch.setattr(deep_research, "suggest_trading_strategy", lambda *args, **kwargs: {"reasoning": "ok"})
 
     result = deep_research.analyze_ticker("AAPL")

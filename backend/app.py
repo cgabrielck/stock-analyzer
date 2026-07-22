@@ -1234,6 +1234,7 @@ def _render_deep_research_result(ticker: str, result: Dict[str, Any], lang: str)
     trade = result.get("trade_plan", {})
     option = result.get("options_plan", {})
     technical = result.get("technical", {})
+    validation = result.get("validation", {})
     with st.expander(f"{ticker} — {t('deep.research', lang)}", expanded=True):
         cols = st.columns(4)
         cols[0].metric(t("deep.short", lang), f"{short.get('score', 0):.1f}", short.get("view", "neutral").upper())
@@ -1269,13 +1270,39 @@ def _render_deep_research_result(ticker: str, result: Dict[str, Any], lang: str)
 
         section = st.segmented_control(
             t("deep.detail_section", lang),
-            options=["sessions", "options", "evidence", "reasoner"],
+            options=["validation", "sessions", "options", "evidence", "reasoner"],
             format_func=lambda key: t(f"deep.section_{key}", lang),
-            default="sessions",
+            default="validation",
             key=f"picks_detail_{ticker}",
         ) or "sessions"
 
-        if section == "sessions":
+        if section == "validation":
+            if not validation.get("available"):
+                st.warning(t("validation.unavailable", lang, reason=validation.get("reason", "N/A")))
+            else:
+                stance_result = validation.get("by_stance", {}).get(trade.get("stance"), {})
+                confidence = stance_result.get("confidence", {})
+                validation_cols = st.columns(4)
+                validation_cols[0].metric(t("validation.confidence", lang), t(f"validation.{confidence.get('level', 'insufficient')}", lang))
+                validation_cols[1].metric(t("validation.samples", lang), stance_result.get("entered_count", 0))
+                validation_cols[2].metric(t("validation.win_rate", lang), _percent(stance_result.get("win_rate_pct")))
+                validation_cols[3].metric(t("validation.avg_return", lang), _percent(stance_result.get("average_return_pct")))
+                quality_cols = st.columns(4)
+                quality_cols[0].metric(t("validation.excess_return", lang), _percent(stance_result.get("average_excess_return_pct")))
+                quality_cols[1].metric(t("validation.max_drawdown", lang), _percent(validation.get("max_drawdown_pct")))
+                quality_cols[2].metric(t("validation.target1_rate", lang), _percent(stance_result.get("target1_hit_rate_pct")))
+                quality_cols[3].metric(t("validation.stop_rate", lang), _percent(stance_result.get("stop_hit_rate_pct")))
+                st.caption(t(
+                    "validation.current_stance", lang,
+                    stance=str(trade.get("stance", "neutral")).upper(),
+                    samples=stance_result.get("entered_count", 0),
+                    win=_percent(stance_result.get("win_rate_pct")),
+                    avg=_percent(stance_result.get("average_return_pct")),
+                    excess=_percent(stance_result.get("average_excess_return_pct")),
+                ))
+                st.caption(t("validation.method", lang, days=validation.get("holding_days", 20)))
+                st.warning(t("validation.limitations", lang))
+        elif section == "sessions":
             sessions = result.get("session_ranges", {}).get("sessions", {})
             session_rows = []
             dates = set()
@@ -1354,6 +1381,10 @@ def _pair(first: Any, second: Any) -> str:
 
 def _currency(value: Any) -> str:
     return f"${value:.2f}" if isinstance(value, (int, float)) else "N/A"
+
+
+def _percent(value: Any) -> str:
+    return f"{value:.1f}%" if isinstance(value, (int, float)) else "N/A"
 
 
 def _price_range(low: Any, high: Any) -> str:
@@ -1737,7 +1768,7 @@ def render_home_tab(lang: str) -> None:
         f"<div class='proof-strip'><div class='proof-item'><div class='proof-value'>{len(STOCK_UNIVERSE)}</div><div class='proof-label'>{t('landing.stocks', lang)}</div></div>"
         f"<div class='proof-item'><div class='proof-value'>14</div><div class='proof-label'>{t('landing.sectors', lang)}</div></div>"
         f"<div class='proof-item'><div class='proof-value'>5</div><div class='proof-label'>{t('landing.max_picks', lang)}</div></div>"
-        f"<div class='proof-item'><div class='proof-value'>78</div><div class='proof-label'>{t('landing.tests', lang)}</div></div></div>",
+        f"<div class='proof-item'><div class='proof-value'>92</div><div class='proof-label'>{t('landing.tests', lang)}</div></div></div>",
         unsafe_allow_html=True,
     )
 

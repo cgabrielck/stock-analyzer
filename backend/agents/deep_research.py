@@ -10,6 +10,7 @@ from agents.fundamental_analyzer import calculate_growth_score
 from agents.llm_agent import suggest_trading_strategy
 from agents.risk_analyzer import calculate_risk_adjusted_score
 from agents.technical_analyzer import compute_technical_indicators
+from backtesting.our_picks import run_our_picks_validation
 from utils.constants import STOCK_UNIVERSE
 
 
@@ -76,6 +77,7 @@ def analyze_selected_stock(
     options = fetch_options_chain(ticker, current_price=current_price)
     options_plan = _build_options_plan(options, trade_plan)
     session_ranges = fetch_trading_session_ranges(ticker)
+    validation = run_our_picks_validation(ticker)
     news = fetch_news(ticker, max_items=5)
     strategy = suggest_trading_strategy(
         ticker,
@@ -105,6 +107,7 @@ def analyze_selected_stock(
         "options": options,
         "options_plan": options_plan,
         "session_ranges": session_ranges,
+        "validation": validation,
         "news": news,
         "quant_score": stock.get("total_score"),
         "risk_adjusted_score": stock.get("risk_adjusted_score"),

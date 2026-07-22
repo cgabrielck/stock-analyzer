@@ -28,6 +28,7 @@ def run_full_analysis(
     lang: str = "zh_tw",
     llm_weight: float = 0.2,
     force_refresh: bool = False,
+    use_llm_analysis: bool = True,
 ) -> Dict[str, Any]:
     agent_state.log_upgrade("开始新一轮分析")
 
@@ -76,7 +77,7 @@ def run_full_analysis(
             stock["base_score"] = round(stock.get("growth_score", 0) * 0.7 + tech_score * 0.3, 1)
             stock["total_score"] = stock["base_score"]
 
-    use_llm = llm_available()
+    use_llm = use_llm_analysis and llm_available()
     if use_llm:
         candidates = sorted(
             scored, key=lambda stock: stock.get("total_score", 0) or 0, reverse=True,
@@ -131,7 +132,7 @@ def run_full_analysis(
         agent_state.log_recommendation(recommendations)
         agent_state.log_upgrade(f"成功推荐 {len(recommendations)} 只股票")
 
-    use_llm = llm_available()
+    use_llm = use_llm_analysis and llm_available()
     all_rankings: List[Dict[str, Any]] = []
     for s in scored:
         entry = {

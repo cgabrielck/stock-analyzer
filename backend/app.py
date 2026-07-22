@@ -193,6 +193,9 @@ def init_state() -> None:
         st.session_state.lang: str = "zh_tw"
         st.session_state.portfolio: Dict[str, Any] = {}
         st.session_state.market_regime: Dict[str, Any] = {}
+        st.session_state.deep_research: Dict[str, Dict[str, Any]] = {}
+        st.session_state.deep_selection: List[str] = []
+        st.session_state.deep_selection_widget: List[str] = []
 
 
 def build_sidebar() -> Dict[str, Any]:
@@ -433,6 +436,7 @@ def run_analysis(params: Dict[str, Any]) -> None:
         lang=lang,
         llm_weight=params.get("llm_weight", 0.2),
         force_refresh=force_refresh,
+        use_llm_analysis=False,
     )
 
     progress_bar.empty()
@@ -446,6 +450,10 @@ def run_analysis(params: Dict[str, Any]) -> None:
     st.session_state.agent_summary = results.get("agent_summary", {})
     st.session_state.use_llm = results.get("use_llm", False)
     st.session_state.market_regime = results.get("market_regime", {})
+    valid_tickers = {stock["ticker"] for stock in st.session_state.scored_data}
+    st.session_state.deep_selection_widget = [
+        ticker for ticker in st.session_state.get("deep_selection_widget", []) if ticker in valid_tickers
+    ]
     st.session_state.analysis_done = True
     st.session_state.analysis_running = False
 
@@ -709,6 +717,55 @@ def _build_trade_plan_text(data: Dict[str, Any], lang: str) -> str:
 def render_recommendations_tab() -> None:
     lang = st.session_state.get("lang", "zh_tw")
     recs = st.session_state.recommendations
+    scored = st.session_state.get("scored_data", [])
+
+    st.subheader(t("deep.pool_title", lang))
+    st.caption(t("deep.pool_desc", lang))
+    top_tickers = [stock["ticker"] for stock in recs[:3]]
+    action1, action2 = st.columns(2)
+    with action1:
+        if st.button(t("deep.select_top", lang), width="stretch", key="deep_select_top"):
+            st.session_state.deep_selection_widget = top_tickers
+            st.rerun()
+    with action2:
+        if st.button(t("deep.clear", lang), width="stretch", key="deep_clear"):
+            st.session_state.deep_selection_widget = []
+            st.rerun()
+
+    stock_by_ticker = {stock["ticker"]: stock for stock in scored}
+    options = list(stock_by_ticker)
+    selected = st.multiselect(
+        t("deep.selector", lang),
+        options,
+        max_selections=5,
+        format_func=lambda ticker: f"{ticker} — {_stock_name(stock_by_ticker[ticker], lang)}",
+        key="deep_selection_widget",
+    )
+    if st.button(
+        t("deep.run", lang),
+        type="primary",
+        width="stretch",
+        disabled=not selected,
+        key="deep_run",
+    ):
+        from agents.deep_research import analyze_selected_stock
+        results = {}
+        progress = st.progress(0, text=t("deep.running", lang))
+        for index, ticker in enumerate(selected):
+            results[ticker] = analyze_selected_stock(stock_by_ticker[ticker], lang)
+            progress.progress((index + 1) / len(selected), text=f"{ticker} ({index + 1}/{len(selected)})")
+        progress.empty()
+        st.session_state.deep_research = results
+
+    deep_results = st.session_state.get("deep_research", {})
+    if deep_results:
+        st.markdown("---")
+        st.subheader(t("deep.results", lang))
+        for ticker, result in deep_results.items():
+            _render_deep_research_result(ticker, result, lang)
+
+    st.markdown("---")
+    st.subheader(t("deep.system_picks", lang))
     if not recs:
         st.warning(t("recommend.nodata", lang))
         return
@@ -744,6 +801,7 @@ def render_recommendations_tab() -> None:
                 """,
                 unsafe_allow_html=True,
             )
+
 
     st.markdown("<hr style='margin:1.5rem 0;'>", unsafe_allow_html=True)
     for i, rec in enumerate(recs):
@@ -1246,6 +1304,50 @@ def render_recommendations_tab() -> None:
                         )
                     else:
                         st.caption("No chart data available")
+
+
+def _render_deep_research_result(ticker: str, result: Dict[str, Any], lang: str) -> None:
+    if result.get("error"):
+        st.error(f"{ticker}: {result['error']}")
+        return
+    short = result.get("short_term", {})
+    long = result.get("long_term", {})
+    avoid = result.get("avoid", {})
+    strategy = result.get("strategy", {})
+    with st.expander(f"{ticker} — {t('deep.research', lang)}", expanded=True):
+        cols = st.columns(4)
+        cols[0].metric(t("deep.short", lang), f"{short.get('score', 0):.1f}", short.get("view", "neutral").upper())
+        cols[1].metric(t("deep.long", lang), f"{long.get('score', 0):.1f}", long.get("view", "neutral").upper())
+        cols[2].metric(t("risk.selection_score", lang), result.get("risk_adjusted_score", "N/A"))
+        cols[3].metric(t("deep.avoid", lang), t("deep.yes", lang) if avoid.get("active") else t("deep.no", lang))
+        technical = result.get("technical", {})
+        tech_cols = st.columns(4)
+        tech_cols[0].metric("EMA 9 / 21", _pair(technical.get("ema_9"), technical.get("ema_21")))
+        tech_cols[1].metric("EMA 50 / 200", _pair(technical.get("ema_50"), technical.get("ema_200")))
+        tech_cols[2].metric("ADX 14", _number(technical.get("adx_14")))
+        tech_cols[3].metric("MACD", _number(technical.get("macd_histogram"), 3))
+        if avoid.get("reasons"):
+            st.markdown("**" + t("deep.avoid_reasons", lang) + "**")
+            for reason in avoid["reasons"]:
+                st.markdown(f"- {reason}")
+        if strategy.get("error"):
+            st.warning(t("deep.llm_unavailable", lang))
+        else:
+            st.markdown("**" + t("deep.trade_plan", lang) + "**")
+            st.write(strategy.get("reasoning", ""))
+            plan_cols = st.columns(3)
+            plan_cols[0].metric(t("deep.entry", lang), _number(strategy.get("entry", {}).get("price")))
+            targets = strategy.get("targets", [])
+            plan_cols[1].metric(t("deep.target", lang), _number(targets[0].get("price") if targets else None))
+            plan_cols[2].metric(t("deep.stop", lang), _number(strategy.get("stop_loss", {}).get("price")))
+
+
+def _number(value: Any, decimals: int = 2) -> str:
+    return f"{value:.{decimals}f}" if isinstance(value, (int, float)) else "N/A"
+
+
+def _pair(first: Any, second: Any) -> str:
+    return f"{_number(first)} / {_number(second)}"
 
 
 def render_rankings_tab() -> None:

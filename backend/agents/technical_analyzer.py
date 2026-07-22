@@ -47,6 +47,29 @@ def _compute_sma(series: pd.Series, length: int) -> float:
     return float(s.iloc[-1]) if not pd.isna(s.iloc[-1]) else None
 
 
+def _compute_ema(series: pd.Series, length: int) -> Optional[float]:
+    if len(series) < length:
+        return None
+    value = series.ewm(span=length, adjust=False).mean().iloc[-1]
+    return float(value) if not pd.isna(value) else None
+
+
+def _compute_adx(high: pd.Series, low: pd.Series, close: pd.Series, length: int = 14) -> Optional[float]:
+    if len(close) < length * 2:
+        return None
+    up_move = high.diff()
+    down_move = -low.diff()
+    plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
+    minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
+    tr = pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
+    atr = tr.rolling(length).mean()
+    plus_di = 100 * plus_dm.rolling(length).mean() / atr.replace(0, np.nan)
+    minus_di = 100 * minus_dm.rolling(length).mean() / atr.replace(0, np.nan)
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
+    value = dx.rolling(length).mean().iloc[-1]
+    return float(value) if not pd.isna(value) else None
+
+
 def _compute_bb(series: pd.Series, length: int = 20, std: int = 2):
     if len(series) < length:
         return None, None
@@ -172,6 +195,12 @@ def compute_technical_indicators(
             "atr_14": atr_val,
             "volume_ratio_10_50": volume_ratio,
             "price_vs_sma50_pct": price_vs_sma50,
+            "ema_9": _compute_ema(close, 9),
+            "ema_21": _compute_ema(close, 21),
+            "ema_50": _compute_ema(close, 50),
+            "ema_200": _compute_ema(close, 200),
+            "sma_200": _compute_sma(close, 200),
+            "adx_14": _compute_adx(high, low, close, 14),
         }
         risk_metrics = calculate_risk_metrics(close)
         risk_metrics["risk_level"] = risk_label(risk_metrics)

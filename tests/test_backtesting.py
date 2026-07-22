@@ -8,10 +8,12 @@ from backtesting.calibration import ExpandingScoreCalibrator
 from backtesting.engine import (
     BacktestResult,
     _calculate_turnover,
+    _close_on_date,
     _compute_aggregate_metrics,
     _extract_fundamentals_as_of,
     _target_weights,
 )
+from utils.selection import MIN_RECOMMENDATION_METRICS
 
 
 def test_historical_peg_uses_price_available_on_rebalance_date() -> None:
@@ -120,3 +122,15 @@ def test_backtest_result_exposes_calibration_quality_flag() -> None:
     result = BacktestResult()
 
     assert result.calibration == {}
+    assert result.model_scope == "fundamental_technical"
+    assert MIN_RECOMMENDATION_METRICS == 4
+
+
+def test_close_on_date_requires_an_exact_common_session() -> None:
+    prices = pd.DataFrame(
+        {"Close": [100.0, 101.0]},
+        index=pd.DatetimeIndex(["2026-01-02", "2026-01-05"], tz="America/New_York"),
+    )
+
+    assert _close_on_date(prices, "2026-01-05") == 101.0
+    assert _close_on_date(prices, "2026-01-03") is None

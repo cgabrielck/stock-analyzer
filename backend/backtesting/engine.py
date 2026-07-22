@@ -40,10 +40,17 @@ from agents.portfolio_manager import (
 from agents.market_regime import classify_market_regime
 from agents.risk_analyzer import calculate_risk_adjusted_score, calculate_risk_metrics, risk_label
 from backtesting.calibration import ExpandingScoreCalibrator, save_calibration_snapshot
+from backtesting.statistics import (
+    DEFAULT_BOOTSTRAP_ITERATIONS,
+    DEFAULT_BOOTSTRAP_SEED,
+    STATISTICS_VERSION,
+    bootstrap_ci,
+    effective_sample_size,
+)
 from backtesting.universe import HistoricalUniverse
 from utils.cache import cache
 from utils.constants import STOCK_UNIVERSE, SCORING_WEIGHTS
-from utils.selection import select_recommendations
+from utils.selection import MIN_RECOMMENDATION_METRICS, select_recommendations
 
 FILING_LAG_DAYS: int = 60
 MAX_WORKERS: int = 5
@@ -323,6 +330,23 @@ def _score_stock_technical(hist: pd.DataFrame, ticker: str) -> Dict[str, Any]:
 # Backtest runner
 # ---------------------------------------------------------------------------
 
+def _index_date(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    return pd.Timestamp(value).date().isoformat()
+
+
+def _close_on_date(frame: pd.DataFrame, target_date: Optional[str]) -> Optional[float]:
+    if frame is None or frame.empty or not target_date or "Close" not in frame:
+        return None
+    dates = pd.DatetimeIndex(frame.index).tz_localize(None).normalize()
+    matches = frame.loc[dates == pd.Timestamp(target_date), "Close"]
+    if matches.empty:
+        return None
+    value = pd.to_numeric(matches.iloc[-1], errors="coerce")
+    return float(value) if np.isfinite(value) and value > 0 else None
+
+
 class BacktestResult:
     def __init__(self) -> None:
         self.periods: List[Dict[str, Any]] = []
@@ -346,6 +370,10 @@ class BacktestResult:
         self.coverage: Dict[str, Any] = {}
         self.warnings: List[Dict[str, str]] = []
         self.calibration: Dict[str, Any] = {}
+        self.model_scope: str = "fundamental_technical"
+        self.statistics: Dict[str, Any] = {}
+        self.evidence_grade: Dict[str, Any] = {}
+        self.cost_sensitivity: List[Dict[str, Any]] = []
 
     @property
     def num_periods(self) -> int:
@@ -371,6 +399,7 @@ def run_backtest(
 
     end_date = end or datetime.now().strftime("%Y-%m-%d")
     result = BacktestResult()
+    result.model_scope = "fundamental_technical" if use_fundamentals else "technical_only"
     universe = HistoricalUniverse(selected_tickers=selected_tickers)
     tickers = universe.all_tickers()
     all_tickers = tickers + ["SPY", "^VIX"]
@@ -378,7 +407,7 @@ def run_backtest(
     if progress_callback:
         progress_callback(1, 0, "Fetching historical prices...")
 
-    warmup_start = (pd.Timestamp(start) - pd.DateOffset(months=6)).strftime("%Y-%m-%d")
+    warmup_start = (pd.Timestamp(start) - pd.DateOffset(months=13)).strftime("%Y-%m-%d")
     fetch_end = (pd.Timestamp(end_date) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
     price_data = fetch_price_data(all_tickers, warmup_start, fetch_end)
 
@@ -431,7 +460,9 @@ def run_backtest(
     pending_observations: List[Tuple[float, bool]] = []
     technical_coverage: List[float] = []
     fundamental_coverage: List[float] = []
+    eligibility_coverage: List[float] = []
     missing_exit_count = 0
+    processed_rebalance_dates: List[pd.Timestamp] = []
 
     for i, (reb_date, reb_date_tz) in enumerate(zip(rebalance_dates, reb_dates_tz)):
         # A final partial month has no comparable forward return.
@@ -447,6 +478,7 @@ def run_backtest(
         period_universe = universe.tickers_for(reb_date.date())
         technical_count = 0
         fundamental_count = 0
+        eligible_count = 0
 
         for ticker in period_universe:
             df = price_data.get(ticker)
@@ -464,6 +496,7 @@ def run_backtest(
             tech_score = tech.get("total_score", 0)
             score = tech_score
             fund_score: Optional[float] = None
+            metrics_used = 0
 
             if use_fundamentals and ticker in fund_data:
                 qf = fund_data[ticker]
@@ -486,6 +519,8 @@ def run_backtest(
                 "total_score": score,
                 "tech_score": tech_score,
                 "fund_score": fund_score,
+                "metrics_used": metrics_used,
+                "model_scope": result.model_scope,
                 "price": tech.get("price"),
                 "rsi_14": tech.get("rsi_14"),
                 "macd_histogram": tech.get("macd_histogram"),
@@ -499,6 +534,14 @@ def run_backtest(
             entry.update(calculate_risk_adjusted_score(score, risk_metrics))
             scored.append(entry)
 
+        if use_fundamentals:
+            eligible_count = sum(
+                stock.get("metrics_used", 0) >= MIN_RECOMMENDATION_METRICS
+                for stock in scored
+            )
+        else:
+            eligible_count = len(scored)
+
         scored.sort(key=lambda x: x.get("risk_adjusted_score", 0) or 0, reverse=True)
         spy_history = price_data["SPY"][price_data["SPY"].index <= reb_date_tz]["Close"]
         vix_df = price_data.get("^VIX")
@@ -510,30 +553,55 @@ def run_backtest(
             fill_threshold=market_regime.get("fill_threshold", FILL_THRESHOLD),
             max_per_sector=MAX_PER_SECTOR,
             top_n=TOP_N,
+            min_metrics=MIN_RECOMMENDATION_METRICS if use_fundamentals else None,
             max_satellite=1,
             satellite_threshold=65.0,
             score_field="risk_adjusted_score",
         )
         technical_coverage.append(technical_count / len(period_universe) if period_universe else 0.0)
         fundamental_coverage.append(fundamental_count / technical_count if technical_count else 0.0)
+        eligibility_coverage.append(eligible_count / len(scored) if scored else 0.0)
+        processed_rebalance_dates.append(reb_date)
 
         next_date_tz = reb_date_tz + pd.DateOffset(months=1)
+        spy_df = price_data.get("SPY")
+        spy_ret = None
+        period_entry_date = None
+        period_exit_date = None
+        if spy_df is not None:
+            spy_entry_slice = spy_df[(spy_df.index > reb_date_tz) & (spy_df.index <= next_date_tz)]
+            spy_exit_slice = spy_df[(spy_df.index > reb_date_tz) & (spy_df.index <= next_date_tz)]
+            if len(spy_entry_slice) >= 2 and not spy_exit_slice.empty:
+                period_entry_date = _index_date(spy_entry_slice.index[0])
+                period_exit_date = _index_date(spy_exit_slice.index[-1])
+                spy_entry = float(spy_entry_slice["Close"].iloc[0])
+                spy_exit = float(spy_exit_slice["Close"].iloc[-1])
+                spy_ret = spy_exit / spy_entry - 1
         forward_returns: Dict[str, float] = {}
         all_forward_returns: Dict[str, float] = {}
+        position_prices: Dict[str, Dict[str, Any]] = {}
         for stock in scored:
             ticker = stock["ticker"]
-            entry_price = stock.get("price")
             df = price_data.get(ticker)
-            if not entry_price or df is None:
+            entry_price = _close_on_date(df, period_entry_date)
+            exit_price = _close_on_date(df, period_exit_date)
+            if entry_price is None or exit_price is None:
                 continue
-            exit_slice = df[(df.index > reb_date_tz) & (df.index <= next_date_tz)]
-            if exit_slice.empty:
-                continue
-            exit_price = float(exit_slice["Close"].iloc[-1])
             all_forward_returns[ticker] = exit_price / entry_price - 1
+            position_prices[ticker] = {
+                "entry_date": period_entry_date,
+                "exit_date": period_exit_date,
+                "entry_price": round(float(entry_price), 4),
+                "exit_price": round(exit_price, 4),
+            }
         pending_observations = [
             (stock["risk_adjusted_score"], all_forward_returns[stock["ticker"]] > 0)
-            for stock in scored if stock["ticker"] in all_forward_returns
+            for stock in scored
+            if stock["ticker"] in all_forward_returns
+            and (
+                not use_fundamentals
+                or stock.get("metrics_used", 0) >= MIN_RECOMMENDATION_METRICS
+            )
         ]
         forward_returns = {
             pick["ticker"]: all_forward_returns[pick["ticker"]]
@@ -547,16 +615,6 @@ def run_backtest(
             sec = pick.get("sector", "Unknown")
             result.sector_counts[sec] = result.sector_counts.get(sec, 0) + 1
 
-        spy_df = price_data.get("SPY")
-        spy_ret = None
-        if spy_df is not None:
-            spy_entry_slice = spy_df[spy_df.index <= reb_date_tz]
-            spy_exit_slice = spy_df[(spy_df.index > reb_date_tz) & (spy_df.index <= next_date_tz)]
-            if not spy_entry_slice.empty and not spy_exit_slice.empty:
-                spy_entry = float(spy_entry_slice["Close"].iloc[-1])
-                spy_exit = float(spy_exit_slice["Close"].iloc[-1])
-                spy_ret = spy_exit / spy_entry - 1
-
         weights, calibration_ready = _target_weights(
             picks,
             weighting,
@@ -569,7 +627,7 @@ def run_backtest(
         complete_returns = len(forward_returns) == len(picks)
         gross_return = sum(weights.get(ticker, 0.0) * value for ticker, value in forward_returns.items())
         net_return: Optional[float] = None
-        if picks and complete_returns:
+        if complete_returns and spy_ret is not None:
             net_return = (1.0 - cost_rate) * (1.0 + gross_return) - 1.0
             portfolio_value *= 1.0 + net_return
             portfolio_values.append(portfolio_value)
@@ -586,9 +644,35 @@ def run_backtest(
             spy_values.append(spy_value)
 
         fund_scores = [p.get("fund_score") for p in picks if p.get("fund_score") is not None]
+        positions = []
+        for pick in picks:
+            ticker = pick["ticker"]
+            provenance = position_prices.get(ticker, {})
+            positions.append({
+                "ticker": ticker,
+                "entry_date": provenance.get("entry_date"),
+                "exit_date": provenance.get("exit_date"),
+                "entry_price": provenance.get("entry_price"),
+                "exit_price": provenance.get("exit_price"),
+                "return_pct": round(forward_returns[ticker] * 100, 2) if ticker in forward_returns else None,
+                "weight": round(weights.get(ticker, 0.0), 4),
+                "model_scope": result.model_scope,
+                "metrics_used": pick.get("metrics_used", 0),
+                "price_source": "historical_adjusted_close",
+            })
+        benchmark_aligned = spy_ret is not None and (not positions or all(
+            position.get("entry_date") == period_entry_date
+            and position.get("exit_date") == period_exit_date
+            for position in positions
+        ))
         period = {
             "date": reb_date,
+            "entry_date": period_entry_date,
+            "exit_date": period_exit_date,
             "picks": [p["ticker"] for p in picks],
+            "positions": positions,
+            "model_scope": result.model_scope,
+            "benchmark_alignment": "exact_period_dates" if benchmark_aligned else "unavailable_or_misaligned",
             "avg_score": round(sum(p.get("total_score", 0) for p in picks) / len(picks), 1) if picks else 0,
             "avg_model_score": round(sum(p.get("total_score", 0) for p in picks) / len(picks), 1) if picks else 0,
             "avg_risk_adjusted_score": round(sum(p.get("risk_adjusted_score", 0) for p in picks) / len(picks), 1) if picks else 0,
@@ -599,11 +683,13 @@ def run_backtest(
             "num_picks": len(picks),
             "avg_return": round(net_return * 100, 2) if net_return is not None else None,
             "gross_return": round(gross_return * 100, 2) if complete_returns and picks else None,
+            "gross_return_raw": gross_return if complete_returns and picks else None,
             "net_return": round(net_return * 100, 2) if net_return is not None else None,
             "spy_return": round(spy_ret * 100, 2) if spy_ret is not None else None,
             "weights": {ticker: round(weight, 4) for ticker, weight in weights.items()},
             "cash_weight": round(1.0 - sum(weights.values()), 4),
             "turnover": round(turnover, 4),
+            "turnover_raw": turnover,
             "transaction_cost": round(transaction_cost, 2),
             "portfolio_value": round(portfolio_value, 2),
             "calibration_ready": calibration_ready,
@@ -612,11 +698,15 @@ def run_backtest(
                 "universe": len(period_universe),
                 "technical": technical_count,
                 "fundamental": fundamental_count,
+                "eligible": eligible_count,
+                "ineligible": len(scored) - eligible_count,
+                "eligibility_pct": round(eligible_count / len(scored) * 100, 1) if scored else 0.0,
+                "minimum_metrics": MIN_RECOMMENDATION_METRICS if use_fundamentals else None,
                 "scored": len(scored),
             },
         }
 
-        if period["avg_return"] is not None and period["spy_return"] is not None:
+        if period["avg_return"] is not None and period["spy_return"] is not None and benchmark_aligned:
             period["alpha"] = round(period["avg_return"] - period["spy_return"], 2)
             period["beat_spy"] = period["avg_return"] > period["spy_return"]
             result.total_periods += 1
@@ -634,18 +724,33 @@ def run_backtest(
             })
 
     calibrator.add_many(pending_observations)
+    universe_coverage = universe.coverage_for(processed_rebalance_dates)
     result.coverage = {
         "requested_tickers": len(tickers),
         "tickers_with_prices": sum(ticker in price_data for ticker in tickers),
         "avg_technical_pct": round(float(np.mean(technical_coverage)) * 100, 1) if technical_coverage else 0.0,
         "avg_fundamental_pct": round(float(np.mean(fundamental_coverage)) * 100, 1) if fundamental_coverage else 0.0,
+        "avg_eligibility_pct": round(float(np.mean(eligibility_coverage)) * 100, 1) if eligibility_coverage else 0.0,
+        "minimum_metrics": MIN_RECOMMENDATION_METRICS if use_fundamentals else None,
+        "universe": universe_coverage,
+        "universe_status": universe.status(),
         "missing_exit_prices": missing_exit_count,
     }
     result.calibration = calibrator.snapshot()
+    result.calibration["model_scope"] = result.model_scope
+    result.calibration["quality_gates"] = {
+        "historical_universe_coverage_pct": universe_coverage["coverage_pct"],
+        "technical_coverage_pct": result.coverage["avg_technical_pct"],
+        "eligibility_coverage_pct": result.coverage["avg_eligibility_pct"],
+        "missing_exit_prices": missing_exit_count,
+    }
     result.calibration["persisted"] = False
     calibration_eligible = (
         not universe.uses_current_universe_fallback
+        and universe_coverage["coverage_pct"] == 100.0
+        and use_fundamentals
         and result.coverage["avg_technical_pct"] >= 80
+        and result.coverage["avg_eligibility_pct"] >= 50
         and missing_exit_count == 0
     )
     result.calibration["eligible_for_live"] = calibration_eligible
@@ -664,10 +769,15 @@ def run_backtest(
             "code": "survivorship_bias",
             "message": "Historical universe snapshots are unavailable; results use today's stock universe and may contain survivorship bias.",
         })
+    elif universe_coverage["coverage_pct"] < 100:
+        result.warnings.append({
+            "code": "historical_universe_gap",
+            "message": "Historical universe snapshots do not cover every backtest period; uncovered periods contain no candidates.",
+        })
     if use_fundamentals and result.coverage["avg_fundamental_pct"] < 50:
         result.warnings.append({
             "code": "low_fundamental_coverage",
-            "message": "Point-in-time fundamental coverage is below 50%; early periods may rely mainly on technical scores.",
+            "message": "Point-in-time fundamental coverage is below 50%; candidates without four metrics are excluded from picks.",
         })
     if missing_exit_count:
         result.warnings.append({
@@ -681,6 +791,7 @@ def run_backtest(
         })
 
     _compute_aggregate_metrics(result, portfolio_values, spy_values, initial_capital)
+    _attach_statistical_evidence(result)
     return result
 
 
@@ -747,14 +858,14 @@ def _compute_aggregate_metrics(
 
     spy_valid = [p for p in valid if p.get("spy_return") is not None]
 
-    result.win_rate_pct = round(result.wins / result.total_periods * 100, 1) if result.total_periods > 0 else 0.0
+    aligned_periods = result.wins + result.losses
+    result.win_rate_pct = round(result.wins / aligned_periods * 100, 1) if aligned_periods > 0 else 0.0
 
     returns = [p["avg_return"] for p in valid if p["avg_return"] is not None]
     spy_returns = [p["spy_return"] for p in spy_valid if p["spy_return"] is not None]
 
-    result.avg_alpha_pct = round(
-        sum(p.get("alpha", 0) for p in valid if p.get("alpha") is not None) / len(valid), 2
-    )
+    alpha_values = [p["alpha"] for p in valid if p.get("alpha") is not None]
+    result.avg_alpha_pct = round(float(np.mean(alpha_values)), 2) if alpha_values else 0.0
 
     if portfolio_values:
         result.total_return_pct = round((portfolio_values[-1] / initial_capital - 1) * 100, 2)
@@ -788,6 +899,91 @@ def _compute_aggregate_metrics(
     result.total_periods = len(valid)
 
 
+def _attach_statistical_evidence(result: BacktestResult) -> None:
+    periods = [period for period in result.periods if period.get("net_return") is not None]
+    aligned = [period for period in periods if period.get("alpha") is not None]
+    returns = [float(period["net_return"]) for period in periods]
+    alpha = [float(period["alpha"]) for period in aligned]
+    samples = [
+        {
+            "sample_id": str(period.get("date")),
+            "entry_date": period.get("entry_date"),
+            "exit_date": period.get("exit_date"),
+            "alpha_pct": period.get("alpha"),
+        }
+        for period in aligned
+    ]
+    effective = effective_sample_size(samples, "alpha_pct")
+    block_length = max(1, min(len(aligned), int(round(len(aligned) ** (1 / 3))))) if aligned else 1
+    return_ci = bootstrap_ci(returns, block_length=block_length)
+    alpha_ci = bootstrap_ci(alpha, block_length=block_length)
+    win_rate_ci = bootstrap_ci(alpha, block_length=block_length, statistic="win_rate")
+    result.statistics = {
+        "version": STATISTICS_VERSION,
+        "method": "monthly_moving_block_percentile",
+        "seed": DEFAULT_BOOTSTRAP_SEED,
+        "iterations": DEFAULT_BOOTSTRAP_ITERATIONS,
+        "block_length": block_length,
+        "effective_periods": effective,
+        "net_return_ci": return_ci,
+        "alpha_ci": alpha_ci,
+        "win_rate_ci": win_rate_ci,
+        "benchmark_alignment": {
+            "aligned": len(aligned),
+            "eligible": len(periods),
+            "pct": round(len(aligned) / len(periods) * 100, 1) if periods else 0.0,
+        },
+    }
+    result.cost_sensitivity = []
+    for cost_bps in (0, 15, 30, 60):
+        scenario_returns = []
+        scenario_alpha = []
+        for period in periods:
+            gross = period.get("gross_return_raw")
+            turnover = period.get("turnover_raw")
+            if gross is None or turnover is None:
+                continue
+            net = ((1 - float(turnover) * cost_bps / 10000) * (1 + float(gross)) - 1) * 100
+            scenario_returns.append(net)
+            if period.get("spy_return") is not None:
+                scenario_alpha.append(net - float(period["spy_return"]))
+        result.cost_sensitivity.append({
+            "transaction_cost_bps": cost_bps,
+            "periods": len(scenario_returns),
+            "average_net_return_pct": round(float(np.mean(scenario_returns)), 3) if scenario_returns else None,
+            "average_alpha_pct": round(float(np.mean(scenario_alpha)), 3) if scenario_alpha else None,
+        })
+
+    universe_coverage = result.coverage.get("universe", {}).get("coverage_pct", 0.0)
+    n_eff = float(effective.get("effective", 0))
+    positive_alpha = alpha_ci.get("lower") is not None and alpha_ci["lower"] > 0
+    positive_return = return_ci.get("lower") is not None and return_ci["lower"] > 0
+    reasons = []
+    if universe_coverage < 100:
+        reasons.append("historical_universe_incomplete")
+    if result.model_scope != "fundamental_technical":
+        reasons.append("model_scope_not_full")
+    if result.statistics["benchmark_alignment"]["pct"] < 100:
+        reasons.append("benchmark_alignment_incomplete")
+    if n_eff < 8 or len(aligned) < 12:
+        level = "insufficient"
+        reasons.append("effective_sample_too_small")
+    elif reasons or not positive_alpha:
+        level = "low"
+        if not positive_alpha:
+            reasons.append("alpha_interval_crosses_zero")
+    elif n_eff >= 24 and positive_return:
+        level = "high"
+    else:
+        level = "medium"
+    result.evidence_grade = {
+        "level": level,
+        "effective_periods": round(n_eff, 2),
+        "raw_periods": len(aligned),
+        "reason_codes": reasons,
+    }
+
+
 def format_backtest_summary(result: BacktestResult) -> Dict[str, Any]:
     return {
         "total_periods": result.total_periods,
@@ -808,6 +1004,10 @@ def format_backtest_summary(result: BacktestResult) -> Dict[str, Any]:
         "coverage": result.coverage,
         "warnings": result.warnings,
         "calibration": result.calibration,
+        "model_scope": result.model_scope,
+        "statistics": result.statistics,
+        "historical_evidence_grade": result.evidence_grade,
+        "cost_sensitivity": result.cost_sensitivity,
         "periods": result.periods,
         "tickers_picked": dict(sorted(result.tickers_picked.items(), key=lambda x: x[1], reverse=True)[:20]),
         "sector_counts": result.sector_counts,

@@ -4,6 +4,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 from agents import recommender
+from utils.selection import MIN_RECOMMENDATION_METRICS
+
+
+def test_recommender_uses_shared_minimum_metrics() -> None:
+    assert recommender.MIN_RECOMMENDATION_METRICS is MIN_RECOMMENDATION_METRICS
 
 
 def test_analysis_resorts_after_technical_scores_and_preserves_sector_limit(monkeypatch) -> None:

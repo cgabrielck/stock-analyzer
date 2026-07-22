@@ -1,6 +1,9 @@
 from typing import Any, Dict, List, Optional
 
 
+MIN_RECOMMENDATION_METRICS: int = 4
+
+
 def select_recommendations(
     scored: List[Dict[str, Any]],
     *,

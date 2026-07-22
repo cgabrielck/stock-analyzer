@@ -3,7 +3,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
-from utils.selection import select_recommendations
+from utils.selection import MIN_RECOMMENDATION_METRICS, select_recommendations
 
 
 def test_selection_fills_below_entry_while_preserving_sector_cap() -> None:
@@ -28,6 +28,7 @@ def test_selection_can_require_minimum_metrics() -> None:
     ]
 
     assert [stock["ticker"] for stock in select_recommendations(scored, min_metrics=4)] == ["B"]
+    assert MIN_RECOMMENDATION_METRICS == 4
 
 
 def test_selection_limits_satellite_positions_and_requires_higher_score() -> None:

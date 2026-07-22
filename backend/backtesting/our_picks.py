@@ -16,6 +16,18 @@ from agents.technical_analyzer import (
     calculate_technical_score,
 )
 from utils.cache import cache
+from backtesting.statistics import (
+    DEFAULT_BOOTSTRAP_ITERATIONS,
+    DEFAULT_BOOTSTRAP_SEED,
+    STATISTICS_VERSION,
+    cost_sensitivity,
+    effective_sample_size,
+    historical_evidence_grade,
+    validation_confidence_intervals,
+)
+
+
+SCHEMA_VERSION = 3
 
 
 def run_our_picks_validation(
@@ -30,15 +42,20 @@ def run_our_picks_validation(
     try:
         from agents.deep_research import _build_trade_plan, _short_term_score
 
-        cache_key = f"our_picks_validation_v2_{ticker}_{holding_days}_{transaction_cost_bps}_{slippage_bps}"
+        cache_key = f"our_picks_validation_v3_{ticker}_{holding_days}_{transaction_cost_bps}_{slippage_bps}"
         if history is None and benchmark is None and not force_refresh:
             cached = cache.get(cache_key, "info", ttl=21600)
             if cached:
                 return cached
         prices = _clean_history(history if history is not None else _download_history(ticker))
-        spy = _clean_history(benchmark if benchmark is not None else _download_history("SPY"))
+        spy = _clean_benchmark(benchmark if benchmark is not None else _download_history("SPY"))
         if len(prices) < 300:
-            return {"available": False, "reason": "insufficient_history", "observations": len(prices)}
+            return {
+                "schema_version": SCHEMA_VERSION,
+                "available": False,
+                "reason": "insufficient_history",
+                "observations": len(prices),
+            }
         signal_positions = _monthly_signal_positions(prices.index, warmup=252, holding_days=holding_days)
         samples: List[Dict[str, Any]] = []
         for position in signal_positions:
@@ -64,15 +81,28 @@ def run_our_picks_validation(
                 transaction_cost_bps=transaction_cost_bps,
                 slippage_bps=slippage_bps,
             )
-            benchmark_return = _benchmark_return(spy, prices.index[position], future.index[-1])
-            side_benchmark = -benchmark_return if stance == "bearish" else benchmark_return
+            benchmark_return = _benchmark_return(spy, sample.get("entry_date"), sample.get("exit_date")) if sample.get("entered") else None
+            directional_benchmark = (
+                (-benchmark_return if stance == "bearish" else benchmark_return)
+                if benchmark_return is not None else None
+            )
+            signal_date = prices.index[position].date().isoformat()
+            directional_alpha = (
+                sample["net_return_pct"] - directional_benchmark * 100
+                if sample.get("entered") and directional_benchmark is not None else None
+            )
             sample.update({
-                "signal_date": prices.index[position].date().isoformat(),
+                "sample_id": f"{ticker.upper()}:{signal_date}:{stance}",
+                "signal_date": signal_date,
                 "short_score": short_score,
                 "stance": stance,
-                "benchmark_return_pct": round(benchmark_return * 100, 2),
-                "side_benchmark_return_pct": round(side_benchmark * 100, 2),
-                "excess_return_pct": round(sample.get("net_return_pct", 0) - side_benchmark * 100, 2) if sample.get("entered") else None,
+                "benchmark_return_pct": round(benchmark_return * 100, 2) if benchmark_return is not None else None,
+                "raw_benchmark_return_pct": round(benchmark_return * 100, 2) if benchmark_return is not None else None,
+                "directional_benchmark_return_pct": round(directional_benchmark * 100, 2) if directional_benchmark is not None else None,
+                "side_benchmark_return_pct": round(directional_benchmark * 100, 2) if directional_benchmark is not None else None,
+                "directional_alpha_pct": round(directional_alpha, 2) if directional_alpha is not None else None,
+                "excess_return_pct": round(directional_alpha, 2) if directional_alpha is not None else None,
+                "benchmark_alignment": "exact_entry_exit_close" if benchmark_return is not None else "unavailable_or_misaligned",
             })
             samples.append(sample)
         result = summarize_validation(ticker, samples, holding_days)
@@ -80,7 +110,11 @@ def run_our_picks_validation(
             cache.set(cache_key, "info", result, ttl=21600)
         return result
     except Exception as exc:
-        return {"available": False, "reason": f"{type(exc).__name__}: {exc}"}
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "available": False,
+            "reason": f"{type(exc).__name__}: {exc}",
+        }
 
 
 def simulate_trade_path(
@@ -101,10 +135,13 @@ def simulate_trade_path(
     entry_zone = trade_plan["entry_zone"]
     entry = None
     entry_index = None
+    entry_execution_type = None
     for index, row in future.iterrows():
         if float(row["Low"]) <= entry_zone["high"] and float(row["High"]) >= entry_zone["low"]:
             reference = entry_zone["high"] if stance == "bullish" else entry_zone["low"]
-            entry = float(row["Open"]) if entry_zone["low"] <= float(row["Open"]) <= entry_zone["high"] else float(reference)
+            open_in_zone = entry_zone["low"] <= float(row["Open"]) <= entry_zone["high"]
+            entry = float(row["Open"]) if open_in_zone else float(reference)
+            entry_execution_type = "open_in_entry_zone" if open_in_zone else "entry_zone_limit"
             entry_index = index
             break
     if entry is None:
@@ -116,6 +153,8 @@ def simulate_trade_path(
     direction = 1 if stance == "bullish" else -1
     exit_price = float(path["Close"].iloc[-1])
     exit_reason = "time"
+    exit_execution_type = "holding_period_close"
+    exit_index = path.index[-1]
     target1_hit = False
     ambiguous = False
     adverse_moves = []
@@ -132,11 +171,15 @@ def simulate_trade_path(
             gap_through = open_price < stop if stance == "bullish" else open_price > stop
             exit_price = open_price if offset > 0 and gap_through else stop
             exit_reason = "stop"
+            exit_execution_type = "gap_open" if offset > 0 and gap_through else "stop_price"
+            exit_index = index
             break
         target1_hit = target1_hit or target1_today
         if target2_today:
             exit_price = target2
             exit_reason = "target2"
+            exit_execution_type = "target_limit"
+            exit_index = index
             break
     gross_return = direction * (exit_price / entry - 1)
     round_trip_cost = 2 * (transaction_cost_bps + slippage_bps) / 10000
@@ -144,11 +187,22 @@ def simulate_trade_path(
     return {
         "entered": True,
         "entry_date": entry_index.date().isoformat(),
+        "exit_date": exit_index.date().isoformat(),
+        "holding_bars": int(path.index.get_loc(exit_index)) + 1,
+        "holding_calendar_days": int((pd.Timestamp(exit_index).normalize() - pd.Timestamp(entry_index).normalize()).days),
         "entry_price": round(entry, 2),
+        "entry_execution_type": entry_execution_type,
         "exit_price": round(exit_price, 2),
         "exit_reason": exit_reason,
+        "exit_execution_type": exit_execution_type,
         "gross_return_pct": round(gross_return * 100, 2),
         "net_return_pct": round(net_return * 100, 2),
+        "transaction_cost_bps_per_side": float(transaction_cost_bps),
+        "slippage_bps_per_side": float(slippage_bps),
+        "transaction_cost_pct": round(2 * transaction_cost_bps / 100, 4),
+        "slippage_cost_pct": round(2 * slippage_bps / 100, 4),
+        "round_trip_cost_bps": round(2 * (transaction_cost_bps + slippage_bps), 4),
+        "round_trip_cost_pct": round(round_trip_cost * 100, 4),
         "target1_hit": target1_hit,
         "target2_hit": exit_reason == "target2",
         "stop_hit": exit_reason == "stop",
@@ -163,30 +217,55 @@ def summarize_validation(ticker: str, samples: List[Dict[str, Any]], holding_day
     returns = [sample["net_return_pct"] for sample in entered]
     equity = pd.Series([(1 + value / 100) for value in returns]).cumprod() if returns else pd.Series(dtype=float)
     max_drawdown = float((equity / equity.cummax() - 1).min() * 100) if not equity.empty else None
-    confidence = _confidence_level(entered)
+    cis = validation_confidence_intervals(entered)
+    ess = effective_sample_size(entered, "net_return_pct")
+    evidence_grade = historical_evidence_grade(entered, cis, ess)
     by_stance = {stance: _summarize_group([sample for sample in samples if sample.get("stance") == stance]) for stance in ("bullish", "bearish", "neutral")}
     return {
+        "schema_version": SCHEMA_VERSION,
         "available": bool(samples),
         "ticker": ticker,
         "method": "monthly_close_signal_next_day_execution",
         "holding_days": holding_days,
         "sample_count": len(samples),
         "entered_count": len(entered),
+        "benchmark_aligned_count": sum(sample.get("benchmark_alignment") == "exact_entry_exit_close" for sample in entered),
+        "benchmark_misaligned_count": sum(sample.get("benchmark_alignment") == "unavailable_or_misaligned" for sample in entered),
         "unfilled_count": sum(sample.get("exit_reason") == "unfilled" for sample in samples),
         "win_rate_pct": round(sum(value > 0 for value in returns) / len(returns) * 100, 1) if returns else None,
         "average_return_pct": round(float(np.mean(returns)), 2) if returns else None,
         "median_return_pct": round(float(np.median(returns)), 2) if returns else None,
-        "average_excess_return_pct": round(float(np.mean([sample["excess_return_pct"] for sample in entered])), 2) if entered else None,
+        "average_excess_return_pct": _mean_present(entered, "excess_return_pct"),
+        "average_directional_alpha_pct": _mean_present(entered, "directional_alpha_pct"),
         "max_drawdown_pct": round(max_drawdown, 2) if max_drawdown is not None else None,
         "target1_hit_rate_pct": _rate(entered, "target1_hit"),
         "target2_hit_rate_pct": _rate(entered, "target2_hit"),
         "stop_hit_rate_pct": _rate(entered, "stop_hit"),
         "worst_mae_pct": round(min((sample["mae_pct"] for sample in entered), default=0), 2) if entered else None,
         "ambiguous_bar_count": sum(bool(sample.get("ambiguous_bar")) for sample in entered),
-        "confidence": confidence,
+        "confidence_intervals": cis,
+        "effective_sample_size": ess,
+        "cost_sensitivity": cost_sensitivity(entered),
+        "historical_evidence_grade": evidence_grade,
+        "confidence": evidence_grade,
         "by_stance": by_stance,
         "samples": samples,
-        "limitations": ["technical_signals_only", "current_universe_survivorship_bias", "daily_bar_stop_first"],
+        "metadata": {
+            "schema_version": SCHEMA_VERSION,
+            "statistics_version": STATISTICS_VERSION,
+            "bootstrap_seed": DEFAULT_BOOTSTRAP_SEED,
+            "bootstrap_iterations": DEFAULT_BOOTSTRAP_ITERATIONS,
+            "benchmark_method": "exact_entry_exit_same_date_close_to_close_proxy",
+            "evidence_scope": "ticker_specific_current_universe",
+        },
+        "limitations": [
+            "technical_signals_only",
+            "current_universe_survivorship_bias",
+            "ticker_selection_bias",
+            "daily_bar_stop_first",
+            "benchmark_close_proxy_not_intraday_execution",
+            "historical_results_not_out_of_sample_portfolio_validation",
+        ],
     }
 
 
@@ -234,11 +313,29 @@ def _download_history(ticker: str) -> pd.DataFrame:
     return yf.Ticker(ticker).history(period="5y", auto_adjust=True)
 
 
-def _benchmark_return(benchmark: pd.DataFrame, start: Any, end: Any) -> float:
-    if benchmark.empty:
-        return 0.0
-    values = benchmark.loc[(benchmark.index > start) & (benchmark.index <= end), "Close"]
-    return float(values.iloc[-1] / values.iloc[0] - 1) if len(values) >= 2 else 0.0
+def _clean_benchmark(benchmark: pd.DataFrame) -> pd.DataFrame:
+    if benchmark is None or benchmark.empty or "Close" not in benchmark:
+        return pd.DataFrame()
+    frame = benchmark[["Close"]].copy()
+    frame["Close"] = pd.to_numeric(frame["Close"], errors="coerce")
+    return frame.dropna(subset=["Close"]).sort_index()
+
+
+def _benchmark_return(benchmark: pd.DataFrame, start: Any, end: Any) -> Optional[float]:
+    if benchmark.empty or start is None or end is None or "Close" not in benchmark:
+        return None
+    normalized = benchmark.copy()
+    normalized.index = pd.DatetimeIndex(normalized.index).tz_localize(None).normalize()
+    normalized = normalized[~normalized.index.duplicated(keep="last")]
+    start_date = pd.Timestamp(start).tz_localize(None).normalize()
+    end_date = pd.Timestamp(end).tz_localize(None).normalize()
+    if start_date not in normalized.index or end_date not in normalized.index:
+        return None
+    start_close = pd.to_numeric(normalized.at[start_date, "Close"], errors="coerce")
+    end_close = pd.to_numeric(normalized.at[end_date, "Close"], errors="coerce")
+    if not np.isfinite(start_close) or not np.isfinite(end_close) or start_close <= 0:
+        return None
+    return float(end_close / start_close - 1)
 
 
 def _summarize_group(samples: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -248,7 +345,7 @@ def _summarize_group(samples: List[Dict[str, Any]]) -> Dict[str, Any]:
         "sample_count": len(samples), "entered_count": len(entered),
         "win_rate_pct": round(sum(value > 0 for value in returns) / len(returns) * 100, 1) if returns else None,
         "average_return_pct": round(float(np.mean(returns)), 2) if returns else None,
-        "average_excess_return_pct": round(float(np.mean([sample["excess_return_pct"] for sample in entered])), 2) if entered else None,
+        "average_excess_return_pct": _mean_present(entered, "excess_return_pct"),
         "target1_hit_rate_pct": _rate(entered, "target1_hit"),
         "stop_hit_rate_pct": _rate(entered, "stop_hit"),
         "confidence": _confidence_level(entered),
@@ -271,3 +368,8 @@ def _confidence_level(samples: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 def _rate(samples: List[Dict[str, Any]], key: str) -> Optional[float]:
     return round(sum(bool(sample.get(key)) for sample in samples) / len(samples) * 100, 1) if samples else None
+
+
+def _mean_present(samples: List[Dict[str, Any]], key: str) -> Optional[float]:
+    values = [float(sample[key]) for sample in samples if sample.get(key) is not None]
+    return round(float(np.mean(values)), 2) if values else None

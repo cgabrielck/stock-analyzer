@@ -216,6 +216,7 @@ def init_state() -> None:
         "picks_errors": {},
         "picks_selection_widget": [],
         "picks_analyzed_tickers": [],
+        "picks_successful_tickers": [],
         "picks_analyzed_at": None,
         "picks_run_error": None,
         "picks_news_selection_widget": [],
@@ -223,6 +224,7 @@ def init_state() -> None:
         "picks_news_analyzed_tickers": [],
         "picks_news_analyzed_at": None,
         "picks_news_status": "idle",
+        "deep_workspace": "research",
         "scan_view": "overview",
         "scan_filter_tickers": [],
     }
@@ -1328,10 +1330,14 @@ def _render_deep_research_result(
                     st.warning(t("validation.unavailable", lang, reason=validation.get("reason", "N/A")))
             else:
                 stance_result = validation.get("by_stance", {}).get(trade.get("stance"), {})
-                confidence = stance_result.get("confidence", {})
+                confidence = validation.get("historical_evidence_grade") or stance_result.get("confidence", {})
+                effective = validation.get("effective_sample_size", {})
+                intervals = validation.get("confidence_intervals", {})
+                aligned = validation.get("benchmark_aligned_count", 0)
+                entered = validation.get("entered_count", 0)
                 validation_cols = st.columns(4)
-                validation_cols[0].metric(t("validation.confidence", lang), t(f"validation.{confidence.get('level', 'insufficient')}", lang))
-                validation_cols[1].metric(t("validation.samples", lang), stance_result.get("entered_count", 0))
+                validation_cols[0].metric(t("validation.evidence_grade", lang), t(f"validation.{confidence.get('level', 'insufficient')}", lang))
+                validation_cols[1].metric(t("validation.effective_samples", lang), f"{effective.get('effective', 0):g} / {effective.get('raw', entered)}")
                 validation_cols[2].metric(t("validation.win_rate", lang), _percent(stance_result.get("win_rate_pct")))
                 validation_cols[3].metric(t("validation.avg_return", lang), _percent(stance_result.get("average_return_pct")))
                 quality_cols = st.columns(4)
@@ -1349,6 +1355,32 @@ def _render_deep_research_result(
                 ))
                 st.caption(t("validation.method", lang, days=validation.get("holding_days", 20)))
                 st.warning(t("validation.limitations", lang))
+                st.caption(t(
+                    "validation.statistics_summary", lang,
+                    aligned=aligned,
+                    entered=entered,
+                    seed=validation.get("metadata", {}).get("bootstrap_seed", "N/A"),
+                    iterations=validation.get("metadata", {}).get("bootstrap_iterations", "N/A"),
+                ))
+                ci_rows = []
+                for key, label_key in (
+                    ("net_return_pct", "validation.avg_return"),
+                    ("directional_alpha_pct", "validation.excess_return"),
+                    ("win_rate_pct", "validation.win_rate"),
+                ):
+                    interval = intervals.get(key, {})
+                    if interval.get("available"):
+                        ci_rows.append({
+                            t("validation.metric", lang): t(label_key, lang),
+                            t("validation.estimate", lang): f"{interval['estimate']:.2f}%",
+                            t("validation.ci_95", lang): f"{interval['lower']:.2f}% – {interval['upper']:.2f}%",
+                        })
+                if ci_rows:
+                    st.dataframe(pd.DataFrame(ci_rows), hide_index=True, width="stretch")
+                sensitivity = validation.get("cost_sensitivity", [])
+                if sensitivity:
+                    with st.expander(t("validation.cost_sensitivity", lang)):
+                        st.dataframe(pd.DataFrame(sensitivity), hide_index=True, width="stretch")
         elif section == "sessions":
             sessions = result.get("session_ranges", {}).get("sessions", {})
             session_rows = []
@@ -1804,17 +1836,18 @@ def render_home_tab(lang: str) -> None:
         f"<div class='landing-copy'>{t('landing.copy', lang)}</div></div>",
         unsafe_allow_html=True,
     )
-    left, right = st.columns(2)
-    with left:
+    deep_col, scan_col, portfolio_col = st.columns(3)
+    with deep_col:
         st.markdown(
             f"<div class='entry-card'><div class='entry-label'>01 · {t('landing.primary', lang)}</div><div class='entry-title'>{t('landing.picks_title', lang)}</div>"
             f"<div class='entry-copy'>{t('landing.picks_copy', lang)}</div><div class='entry-meta'>{t('landing.picks_meta', lang)}</div></div>",
             unsafe_allow_html=True,
         )
         if st.button(t("landing.picks_action", lang), type="primary", width="stretch", key="landing_picks"):
+            st.session_state.deep_workspace = "research"
             st.session_state.app_route = "picks"
             st.rerun()
-    with right:
+    with scan_col:
         st.markdown(
             f"<div class='entry-card'><div class='entry-label'>02</div><div class='entry-title'>{t('landing.scan_title', lang)}</div>"
             f"<div class='entry-copy'>{t('landing.scan_copy', lang, n=len(STOCK_UNIVERSE))}</div><div class='entry-meta'>{t('landing.scan_meta', lang, n=len(STOCK_UNIVERSE))}</div></div>",
@@ -1822,6 +1855,16 @@ def render_home_tab(lang: str) -> None:
         )
         if st.button(t("landing.scan_action", lang), type="secondary", width="stretch", key="landing_scan"):
             st.session_state.app_route = "scan"
+            st.rerun()
+    with portfolio_col:
+        st.markdown(
+            f"<div class='entry-card'><div class='entry-label'>03</div><div class='entry-title'>{t('landing.portfolio_title', lang)}</div>"
+            f"<div class='entry-copy'>{t('landing.portfolio_copy', lang)}</div><div class='entry-meta'>{t('landing.portfolio_meta', lang)}</div></div>",
+            unsafe_allow_html=True,
+        )
+        if st.button(t("landing.portfolio_action", lang), type="secondary", width="stretch", key="landing_portfolio"):
+            st.session_state.deep_workspace = "portfolio"
+            st.session_state.app_route = "picks"
             st.rerun()
     st.markdown(
         f"<div class='proof-strip'><div class='proof-item'><div class='proof-value'>{len(STOCK_UNIVERSE)}</div><div class='proof-label'>{t('landing.stocks', lang)}</div></div>"
@@ -1837,8 +1880,18 @@ def _clear_picks_selection() -> None:
     st.session_state["picks_results"] = {}
     st.session_state["picks_errors"] = {}
     st.session_state["picks_analyzed_tickers"] = []
+    st.session_state["picks_successful_tickers"] = []
     st.session_state["picks_analyzed_at"] = None
     st.session_state["picks_run_error"] = None
+
+
+def _remember_successful_picks(selected: List[str], results: Dict[str, Dict[str, Any]]) -> List[str]:
+    successful = [ticker for ticker in selected if ticker in results and not results[ticker].get("error")]
+    if successful:
+        remembered = st.session_state.get("picks_successful_tickers", [])
+        st.session_state.picks_successful_tickers = list(dict.fromkeys([*remembered, *successful]))[-5:]
+        st.session_state.picks_news_selection_widget = list(st.session_state.picks_successful_tickers)
+    return successful
 
 
 def render_our_picks_page(lang: str, force_refresh: bool = False) -> None:
@@ -1902,6 +1955,7 @@ def render_our_picks_page(lang: str, force_refresh: bool = False) -> None:
             st.session_state.picks_results = results
             st.session_state.picks_errors = {ticker: result["error"] for ticker, result in results.items() if result.get("error")}
             st.session_state.picks_analyzed_tickers = list(selected)
+            _remember_successful_picks(selected, results)
             st.session_state.picks_analyzed_at = pd.Timestamp.now(tz="UTC").isoformat()
             st.session_state.picks_status = "success" if not st.session_state.picks_errors else "partial"
             elapsed = int(time.monotonic() - started_at)
@@ -1926,7 +1980,12 @@ def render_our_picks_page(lang: str, force_refresh: bool = False) -> None:
 
 
 def _import_picks_to_news() -> None:
-    tickers = st.session_state.get("picks_selection_widget") or st.session_state.get("picks_analyzed_tickers") or []
+    tickers = (
+        st.session_state.get("picks_successful_tickers")
+        or st.session_state.get("picks_analyzed_tickers")
+        or st.session_state.get("picks_selection_widget")
+        or []
+    )
     st.session_state["picks_news_selection_widget"] = list(tickers)[:5]
 
 
@@ -1934,8 +1993,14 @@ def render_picks_news_page(lang: str, force_refresh: bool = False) -> None:
     st.subheader(t("picks_news.title", lang))
     st.caption(t("picks_news.desc", lang))
     stock_by_ticker = {stock["ticker"]: stock for stock in STOCK_UNIVERSE}
-    if not st.session_state.get("picks_news_selection_widget") and st.session_state.get("picks_selection_widget"):
-        st.session_state.picks_news_selection_widget = list(st.session_state.picks_selection_widget)[:5]
+    if not st.session_state.get("picks_news_selection_widget"):
+        remembered = (
+            st.session_state.get("picks_successful_tickers")
+            or st.session_state.get("picks_analyzed_tickers")
+            or st.session_state.get("picks_selection_widget")
+            or []
+        )
+        st.session_state.picks_news_selection_widget = list(remembered)[:5]
     selected = st.multiselect(
         t("picks_news.selector", lang), list(stock_by_ticker), max_selections=5,
         format_func=lambda ticker: f"{ticker} — {_stock_name(stock_by_ticker[ticker], lang)}",
@@ -1975,6 +2040,31 @@ def render_picks_news_page(lang: str, force_refresh: bool = False) -> None:
         st.markdown("---")
         for ticker, result in results.items():
             _render_picks_news_result(ticker, result, lang)
+
+
+def render_deep_workspace(lang: str, force_refresh: bool = False) -> None:
+    workspaces = {
+        "research": t("deep.workspace_research", lang),
+        "news": t("deep.workspace_news", lang),
+        "backtest": t("deep.workspace_backtest", lang),
+        "portfolio": t("deep.workspace_portfolio", lang),
+    }
+    workspace = st.segmented_control(
+        t("deep.workspace", lang),
+        options=list(workspaces),
+        format_func=workspaces.get,
+        key="deep_workspace",
+        label_visibility="collapsed",
+    ) or "research"
+    if workspace == "research":
+        render_our_picks_page(lang, force_refresh=force_refresh)
+    elif workspace == "news":
+        render_picks_news_page(lang, force_refresh=force_refresh)
+    elif workspace == "backtest":
+        tickers = st.session_state.get("picks_successful_tickers") or st.session_state.get("picks_selection_widget") or None
+        render_backtest_tab(tickers)
+    else:
+        render_portfolio_tab()
 
 
 def _render_picks_news_result(ticker: str, result: Dict[str, Any], lang: str) -> None:
@@ -2167,6 +2257,32 @@ def render_backtest_tab(selected_tickers: Optional[List[str]] = None) -> None:
             costs=summary.get("total_transaction_cost", 0),
         ))
 
+    statistics = summary.get("statistics", {})
+    evidence = summary.get("historical_evidence_grade", {})
+    if statistics:
+        effective = statistics.get("effective_periods", {})
+        alignment = statistics.get("benchmark_alignment", {})
+        universe_coverage = coverage.get("universe", {}).get("coverage_pct", 0)
+        stat_cols = st.columns(4)
+        stat_cols[0].metric(t("backtest.evidence_grade", lang), t(f"validation.{evidence.get('level', 'insufficient')}", lang))
+        stat_cols[1].metric(t("backtest.effective_periods", lang), f"{effective.get('effective', 0):g} / {effective.get('raw', 0)}")
+        stat_cols[2].metric(t("backtest.benchmark_alignment", lang), f"{alignment.get('pct', 0):.1f}%")
+        stat_cols[3].metric(t("backtest.universe_coverage", lang), f"{universe_coverage:.1f}%")
+        alpha_ci = statistics.get("alpha_ci", {})
+        if alpha_ci.get("available"):
+            st.caption(t(
+                "backtest.alpha_ci", lang,
+                estimate=alpha_ci.get("estimate", 0),
+                lower=alpha_ci.get("lower", 0),
+                upper=alpha_ci.get("upper", 0),
+            ))
+        if evidence.get("reason_codes"):
+            st.warning(t("backtest.grade_limited", lang, reasons=", ".join(evidence["reason_codes"])))
+        sensitivity = summary.get("cost_sensitivity", [])
+        if sensitivity:
+            with st.expander(t("backtest.cost_sensitivity", lang)):
+                st.dataframe(pd.DataFrame(sensitivity), hide_index=True, width="stretch")
+
     st.markdown("---")
     cols = st.columns(4)
     with cols[0]:
@@ -2193,7 +2309,6 @@ def render_backtest_tab(selected_tickers: Optional[List[str]] = None) -> None:
 
     st.markdown("---")
     import plotly.graph_objects as go
-    import pandas as pd
     import numpy as np
 
     periods = summary.get("periods", [])
@@ -2303,7 +2418,11 @@ def render_backtest_tab(selected_tickers: Optional[List[str]] = None) -> None:
             for p in periods:
                 row = {
                     "Date": str(p["date"].date()),
+                    "Entry": p.get("entry_date") or "",
+                    "Exit": p.get("exit_date") or "",
                     "Picks": ", ".join(p.get("picks", [])),
+                    "Model": p.get("model_scope", ""),
+                    "Eligible": p.get("coverage", {}).get("eligible", ""),
                     "Tech Score": p.get("avg_tech_score", ""),
                     "Fund Score": f"{p.get('avg_fund_score', ''):.1f}" if p.get("avg_fund_score") is not None else "",
                     "Total Score": p.get("avg_score", ""),
@@ -2430,13 +2549,11 @@ def build_minimal_sidebar() -> Dict[str, Any]:
 
 
 def render_primary_navigation(lang: str) -> None:
-    home, picks, picks_news, scan, portfolio = st.columns(5)
+    home, picks, scan = st.columns(3)
     actions = [
         (home, "home", t("nav.home", lang)),
         (picks, "picks", t("nav.picks", lang)),
-        (picks_news, "picks_news", t("nav.picks_news", lang)),
         (scan, "scan", t("nav.scan", lang)),
-        (portfolio, "portfolio", t("portfolio.title", lang)),
     ]
     for column, route, label in actions:
         with column:
@@ -2447,6 +2564,8 @@ def render_primary_navigation(lang: str) -> None:
                 key=f"route_{route}",
             ):
                 st.session_state.app_route = route
+                if route == "picks":
+                    st.session_state.deep_workspace = "research"
                 st.rerun()
 
 
@@ -2470,7 +2589,7 @@ def render_scan_page(params: Dict[str, Any], lang: str) -> None:
     views = {
         "overview": t("tab.recommend", lang), "ranking": t("tab.ranking", lang),
         "charts": t("tab.charts", lang), "compare": t("tab.compare", lang),
-        "valuation": t("tab.valuation", lang), "backtest": t("tab.backtest", lang),
+        "valuation": t("tab.valuation", lang),
         "news": t("tab.news", lang), "industry": t("industry_news.title", lang),
         "pool": t("tab.pool", lang), "system": t("tab.ai", lang),
     }
@@ -2486,8 +2605,6 @@ def render_scan_page(params: Dict[str, Any], lang: str) -> None:
         render_charts_tab()
     elif selected_view == "pool":
         render_stock_pool_tab()
-    elif selected_view == "backtest":
-        render_backtest_tab(params["selected_tickers"])
     elif selected_view == "compare":
         render_compare_tab()
     elif selected_view == "valuation":
@@ -2517,6 +2634,11 @@ try {
 
     lang = st.session_state.get("lang", "zh_tw")
 
+    legacy_workspace = {"picks_news": "news", "portfolio": "portfolio"}
+    if st.session_state.app_route in legacy_workspace:
+        st.session_state.deep_workspace = legacy_workspace[st.session_state.app_route]
+        st.session_state.app_route = "picks"
+
     st.markdown(
         f"""
         <div class="terminal-header">
@@ -2541,13 +2663,7 @@ try {
         render_scan_page(params, lang)
     elif route == "picks":
         params = build_minimal_sidebar()
-        render_our_picks_page(lang, force_refresh=params["force_refresh"])
-    elif route == "picks_news":
-        params = build_minimal_sidebar()
-        render_picks_news_page(lang, force_refresh=params["force_refresh"])
-    elif route == "portfolio":
-        build_minimal_sidebar()
-        render_portfolio_tab()
+        render_deep_workspace(lang, force_refresh=params["force_refresh"])
     else:
         build_minimal_sidebar()
         render_home_tab(lang)

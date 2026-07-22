@@ -9,7 +9,7 @@ from agents.llm_agent import analyze_stocks_batch, is_available as llm_available
 from agents.risk_analyzer import calculate_risk_adjusted_score, fetch_risk_metrics
 from agents.market_regime import detect_global_market_regime
 from utils.constants import SECTOR_CN_MAP, STOCK_UNIVERSE
-from utils.selection import select_recommendations
+from utils.selection import MIN_RECOMMENDATION_METRICS, select_recommendations
 from i18n import t
 
 ENTRY_THRESHOLD: float = 60.0
@@ -17,7 +17,6 @@ FILL_THRESHOLD: float = 50.0
 MAX_PER_SECTOR: int = 2
 TOP_N: int = 5
 TECHNICAL_CANDIDATES: int = 15
-MIN_RECOMMENDATION_METRICS: int = 4
 
 
 def run_full_analysis(

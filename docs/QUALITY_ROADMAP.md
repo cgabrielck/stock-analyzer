@@ -135,7 +135,7 @@ Acceptance criteria:
 
 ## Phase 3: Statistical Validation
 
-Status: **Planned**
+Status: **Implemented (historical-universe data pending)**
 
 - Align SPY benchmarks with actual entry and exit timestamps.
 - Rename heuristic confidence to Historical Evidence Grade.
@@ -143,7 +143,21 @@ Status: **Planned**
 - Add cost and slippage sensitivity.
 - Enforce identical live/backtest minimum-data rules.
 - Separate full-model and technical-only historical periods.
-- Add a historical universe to reduce survivorship bias.
+- Support validated historical-universe snapshots and cap evidence when snapshots are absent or incomplete. The repository does not yet contain a licensed point-in-time constituent dataset, so current results remain explicitly survivorship-bias limited.
+
+Implementation notes:
+
+- Trade samples record actual entry/exit dates, execution type, holding duration, and all-in costs.
+- SPY returns use the same entry/exit dates; unavailable dates are excluded instead of treated as zero return.
+- Deterministic moving-block bootstrap intervals cover returns, directional alpha, and win rate.
+- Effective sample size is conservatively limited by interval overlap and positive autocorrelation.
+- Fixed cost scenarios expose sensitivity instead of relying on one cost assumption.
+- Live and full-model backtests share the same four-metric eligibility threshold; technical-only periods are labeled separately.
+- Portfolio evidence is sampled by monthly period, not by correlated positions within the same month.
+- Historical-universe coverage and benchmark alignment are quality gates for evidence and live calibration.
+- Portfolio backtests execute after the signal close on the next common trading close, retain no-pick cash months in SPY comparisons, and exclude incomplete or date-misaligned months from headline evidence.
+- The Deep Analysis workspace now groups Research, Picks News, Backtest, and Portfolio; successful research tickers are queued for news analysis in session memory.
+- TradingAgents was reviewed as an architectural reference for specialist analyst, news, risk, and portfolio roles. Its non-deterministic LLM decisions are not copied into quantitative backtest scoring because that would weaken reproducibility rather than guarantee better returns.
 
 Acceptance criteria:
 

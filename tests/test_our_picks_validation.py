@@ -2,10 +2,16 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
-from backtesting.our_picks import _confidence_level, simulate_trade_path, summarize_validation
+from backtesting.our_picks import (
+    _benchmark_return,
+    _confidence_level,
+    simulate_trade_path,
+    summarize_validation,
+)
 
 
 def _future(rows):
@@ -25,6 +31,12 @@ def test_bullish_path_uses_next_day_and_deducts_round_trip_costs() -> None:
     result = simulate_trade_path(future, _bullish_plan(), "bullish", 15, 5)
 
     assert result["entry_date"] == "2026-01-02"
+    assert result["exit_date"] == "2026-01-05"
+    assert result["holding_bars"] == 2
+    assert result["holding_calendar_days"] == 3
+    assert result["entry_execution_type"] == "open_in_entry_zone"
+    assert result["exit_execution_type"] == "target_limit"
+    assert result["round_trip_cost_bps"] == 40
     assert result["exit_reason"] == "target2"
     assert result["net_return_pct"] == round((113 / 100 - 1) * 100 - 0.4, 2)
 
@@ -93,3 +105,23 @@ def test_confidence_cannot_be_medium_without_positive_excess_return() -> None:
     confidence = _confidence_level(samples)
 
     assert confidence["level"] == "low"
+
+
+def test_benchmark_uses_exact_entry_and_exit_close_dates() -> None:
+    benchmark = pd.DataFrame(
+        {"Close": [100, 150, 110]},
+        index=pd.to_datetime(["2026-01-02", "2026-01-05", "2026-01-06"]),
+    )
+
+    result = _benchmark_return(benchmark, "2026-01-02", "2026-01-06")
+
+    assert result == pytest.approx(0.1)
+
+
+def test_benchmark_returns_none_when_exact_date_is_missing() -> None:
+    benchmark = pd.DataFrame(
+        {"Close": [100, 110]},
+        index=pd.to_datetime(["2026-01-02", "2026-01-06"]),
+    )
+
+    assert _benchmark_return(benchmark, "2026-01-03", "2026-01-06") is None

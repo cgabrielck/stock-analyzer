@@ -32,6 +32,7 @@ def test_clear_picks_callback_clears_selection_and_results() -> None:
     app.session_state["picks_selection_widget"] = ["AAPL"]
     app.session_state["picks_results"] = {"AAPL": {"ticker": "AAPL"}}
     app.session_state["picks_analyzed_tickers"] = ["AAPL"]
+    app.session_state["picks_successful_tickers"] = ["AAPL"]
     app.run()
 
     clear_button = next(button for button in app.button if button.key == "picks_clear")
@@ -40,6 +41,41 @@ def test_clear_picks_callback_clears_selection_and_results() -> None:
     assert app.session_state["picks_selection_widget"] == []
     assert app.session_state["picks_results"] == {}
     assert app.session_state["picks_analyzed_tickers"] == []
+    assert app.session_state["picks_successful_tickers"] == []
+
+
+def test_legacy_news_and_portfolio_routes_open_deep_workspaces() -> None:
+    for route, workspace in (("picks_news", "news"), ("portfolio", "portfolio")):
+        app = AppTest.from_file(APP_PATH, default_timeout=30)
+        app.session_state["app_route"] = route
+        app.run()
+
+        assert not app.exception
+        assert app.session_state["app_route"] == "picks"
+        assert app.session_state["deep_workspace"] == workspace
+
+
+def test_home_has_three_tour_actions() -> None:
+    app = AppTest.from_file(APP_PATH, default_timeout=30).run()
+    button_keys = {button.key for button in app.button}
+
+    assert {"landing_picks", "landing_scan", "landing_portfolio"} <= button_keys
+    assert "route_picks_news" not in button_keys
+    assert "route_portfolio" not in button_keys
+
+
+def test_successful_deep_results_are_remembered_for_news() -> None:
+    stock_app.st.session_state["picks_successful_tickers"] = ["MSFT"]
+    stock_app.st.session_state["picks_news_selection_widget"] = []
+
+    successful = stock_app._remember_successful_picks(
+        ["AAPL", "NVDA"],
+        {"AAPL": {"ticker": "AAPL"}, "NVDA": {"error": "timeout"}},
+    )
+
+    assert successful == ["AAPL"]
+    assert stock_app.st.session_state["picks_successful_tickers"] == ["MSFT", "AAPL"]
+    assert stock_app.st.session_state["picks_news_selection_widget"] == ["MSFT", "AAPL"]
 
 
 def test_tech_chart_builds_from_normalized_data_without_quote_lookup(monkeypatch) -> None:

@@ -1283,7 +1283,18 @@ def _render_deep_research_result(ticker: str, result: Dict[str, Any], lang: str)
 
         if section == "validation":
             if not validation.get("available"):
-                st.warning(t("validation.unavailable", lang, reason=validation.get("reason", "N/A")))
+                if validation.get("reason") == "not_run":
+                    st.info(t("validation.on_demand", lang))
+                    if st.button(t("validation.run", lang), key=f"validation_run_{ticker}", width="stretch"):
+                        from backtesting.our_picks import run_our_picks_validation
+
+                        with st.spinner(t("validation.running", lang)):
+                            validation = run_our_picks_validation(ticker)
+                            result["validation"] = validation
+                            st.session_state.picks_results[ticker]["validation"] = validation
+                        st.rerun()
+                else:
+                    st.warning(t("validation.unavailable", lang, reason=validation.get("reason", "N/A")))
             else:
                 stance_result = validation.get("by_stance", {}).get(trade.get("stance"), {})
                 confidence = stance_result.get("confidence", {})
@@ -1773,7 +1784,7 @@ def render_home_tab(lang: str) -> None:
         f"<div class='proof-strip'><div class='proof-item'><div class='proof-value'>{len(STOCK_UNIVERSE)}</div><div class='proof-label'>{t('landing.stocks', lang)}</div></div>"
         f"<div class='proof-item'><div class='proof-value'>14</div><div class='proof-label'>{t('landing.sectors', lang)}</div></div>"
         f"<div class='proof-item'><div class='proof-value'>5</div><div class='proof-label'>{t('landing.max_picks', lang)}</div></div>"
-        f"<div class='proof-item'><div class='proof-value'>99</div><div class='proof-label'>{t('landing.tests', lang)}</div></div></div>",
+        f"<div class='proof-item'><div class='proof-value'>102</div><div class='proof-label'>{t('landing.tests', lang)}</div></div></div>",
         unsafe_allow_html=True,
     )
 
@@ -1820,10 +1831,28 @@ def render_our_picks_page(lang: str, force_refresh: bool = False) -> None:
 
         st.session_state.picks_status = "running"
         st.session_state.picks_run_error = None
-        progress = st.progress(0, text=t("deep.running", lang))
+        started_at = time.monotonic()
+        total_units = max(1, len(selected) * 4)
+        completed_units = set()
+        active_stages: Dict[str, str] = {}
+        progress = st.progress(0, text=t("deep.progress_starting", lang))
 
-        def update(ticker: str, completed: int, total: int) -> None:
-            progress.progress(completed / total if total else 0, text=f"{ticker} ({completed + 1}/{total})")
+        def update(event: Dict[str, Any]) -> None:
+            ticker = event.get("ticker")
+            stage = event.get("stage", "heartbeat")
+            state = event.get("state")
+            if ticker and stage in {"fundamental", "technical", "market_data", "strategy"}:
+                active_stages[ticker] = stage
+                if state in {"completed", "failed", "skipped"}:
+                    completed_units.add((ticker, stage))
+            if ticker and stage == "ticker" and state == "completed":
+                active_stages.pop(ticker, None)
+            fraction = min(0.98, len(completed_units) / total_units)
+            elapsed = int(time.monotonic() - started_at)
+            status = " · ".join(
+                f"{symbol}: {t(f'deep.stage_{active}', lang)}" for symbol, active in active_stages.items()
+            ) or t("deep.progress_finishing", lang)
+            progress.progress(fraction, text=t("deep.progress_status", lang, elapsed=elapsed, status=status))
 
         try:
             results = analyze_tickers(selected, lang=lang, force_refresh=force_refresh, progress_callback=update)
@@ -1832,7 +1861,8 @@ def render_our_picks_page(lang: str, force_refresh: bool = False) -> None:
             st.session_state.picks_analyzed_tickers = list(selected)
             st.session_state.picks_analyzed_at = pd.Timestamp.now(tz="UTC").isoformat()
             st.session_state.picks_status = "success" if not st.session_state.picks_errors else "partial"
-            progress.progress(1.0, text=t("deep.complete", lang))
+            elapsed = int(time.monotonic() - started_at)
+            progress.progress(1.0, text=t("deep.progress_complete", lang, elapsed=elapsed))
         except Exception as exc:
             st.session_state.picks_status = "error"
             st.session_state.picks_run_error = str(exc)

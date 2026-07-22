@@ -1,3 +1,6 @@
+import concurrent.futures
+import queue
+import time
 from typing import Any, Callable, Dict, List, Optional
 
 from agents.data_fetcher import (
@@ -10,14 +13,24 @@ from agents.fundamental_analyzer import calculate_growth_score
 from agents.llm_agent import suggest_trading_strategy
 from agents.risk_analyzer import calculate_risk_adjusted_score
 from agents.technical_analyzer import compute_technical_indicators
-from backtesting.our_picks import run_our_picks_validation
 from utils.constants import STOCK_UNIVERSE
 
 
-def analyze_ticker(ticker: str, lang: str = "zh_tw", force_refresh: bool = False) -> Dict[str, Any]:
+ProgressCallback = Callable[[Dict[str, Any]], None]
+
+
+def analyze_ticker(
+    ticker: str,
+    lang: str = "zh_tw",
+    force_refresh: bool = False,
+    progress_callback: Optional[ProgressCallback] = None,
+) -> Dict[str, Any]:
+    _emit(progress_callback, ticker, "fundamental", "started")
     stock = fetch_stock_data(ticker, force_refresh=force_refresh)
     if stock.get("error"):
+        _emit(progress_callback, ticker, "fundamental", "failed")
         return {"ticker": ticker, "error": stock["error"], "stage": "fundamental"}
+    _emit(progress_callback, ticker, "fundamental", "completed")
 
     metadata = next((item for item in STOCK_UNIVERSE if item["ticker"] == ticker), {})
     for key in ("name_cn", "name_tw", "name_en", "sector", "universe_tier"):
@@ -31,9 +44,12 @@ def analyze_ticker(ticker: str, lang: str = "zh_tw", force_refresh: bool = False
         "score_details": details,
         "metrics_used": metrics_used,
     })
+    _emit(progress_callback, ticker, "technical", "started")
     technical = compute_technical_indicators(ticker, period="1y", force_refresh=force_refresh)
     if technical.get("error"):
+        _emit(progress_callback, ticker, "technical", "failed")
         return {"ticker": ticker, "error": technical["error"], "stage": "technical"}
+    _emit(progress_callback, ticker, "technical", "completed")
 
     technical_score = technical.get("technical_score")
     if technical_score is not None:
@@ -41,28 +57,49 @@ def analyze_ticker(ticker: str, lang: str = "zh_tw", force_refresh: bool = False
         stock["total_score"] = round(growth_score * 0.7 + technical_score * 0.3, 1)
     stock["risk_metrics"] = technical.get("risk_metrics", {"available": False})
     stock.update(calculate_risk_adjusted_score(stock["total_score"], stock["risk_metrics"]))
-    return analyze_selected_stock(stock, lang=lang, technical=technical)
+    return analyze_selected_stock(stock, lang=lang, technical=technical, progress_callback=progress_callback)
 
 
 def analyze_tickers(
     tickers: List[str],
     lang: str = "zh_tw",
     force_refresh: bool = False,
-    progress_callback: Optional[Callable[[str, int, int], None]] = None,
+    progress_callback: Optional[ProgressCallback] = None,
 ) -> Dict[str, Dict[str, Any]]:
-    results: Dict[str, Dict[str, Any]] = {}
-    for index, ticker in enumerate(tickers):
-        if progress_callback:
-            progress_callback(ticker, index, len(tickers))
+    unordered: Dict[str, Dict[str, Any]] = {}
+    events: queue.Queue[Dict[str, Any]] = queue.Queue()
+
+    def analyze(ticker: str) -> Dict[str, Any]:
         try:
-            results[ticker] = analyze_ticker(ticker, lang=lang, force_refresh=force_refresh)
+            return analyze_ticker(ticker, lang=lang, force_refresh=force_refresh, progress_callback=events.put)
         except Exception as exc:
-            results[ticker] = {"ticker": ticker, "error": str(exc), "stage": "unexpected"}
-    return results
+            return {"ticker": ticker, "error": str(exc), "stage": "unexpected"}
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(3, len(tickers) or 1)) as executor:
+        futures = {executor.submit(analyze, ticker): ticker for ticker in tickers}
+        pending = set(futures)
+        while pending:
+            try:
+                event = events.get(timeout=0.2)
+                _safe_callback(progress_callback, event)
+            except queue.Empty:
+                _safe_callback(progress_callback, {"ticker": None, "stage": "heartbeat", "state": "running"})
+            completed = {future for future in pending if future.done()}
+            for future in completed:
+                ticker = futures[future]
+                while not events.empty():
+                    _safe_callback(progress_callback, events.get_nowait())
+                unordered[ticker] = future.result()
+                _safe_callback(progress_callback, {"ticker": ticker, "stage": "ticker", "state": "completed"})
+            pending -= completed
+        while not events.empty():
+            _safe_callback(progress_callback, events.get_nowait())
+    return {ticker: unordered[ticker] for ticker in tickers}
 
 
 def analyze_selected_stock(
     stock: Dict[str, Any], lang: str = "zh_tw", technical: Optional[Dict[str, Any]] = None,
+    progress_callback: Optional[ProgressCallback] = None,
 ) -> Dict[str, Any]:
     ticker = stock["ticker"]
     technical = technical or compute_technical_indicators(ticker, period="1y", force_refresh=False)
@@ -74,11 +111,17 @@ def analyze_selected_stock(
     avoid = _avoid_assessment(stock, technical, short_score, long_score)
     trade_plan = _build_trade_plan(stock, technical, short_score, long_score, avoid)
     current_price = technical.get("price") or stock.get("price") or 0
-    options = fetch_options_chain(ticker, current_price=current_price)
+    _emit(progress_callback, ticker, "market_data", "started")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        options_future = executor.submit(fetch_options_chain, ticker, current_price=current_price)
+        sessions_future = executor.submit(fetch_trading_session_ranges, ticker)
+        news_future = executor.submit(fetch_news, ticker, 5)
+        options = options_future.result()
+        session_ranges = sessions_future.result()
+        news = news_future.result()
     options_plan = _build_options_plan(options, trade_plan)
-    session_ranges = fetch_trading_session_ranges(ticker)
-    validation = run_our_picks_validation(ticker)
-    news = fetch_news(ticker, max_items=5)
+    _emit(progress_callback, ticker, "market_data", "completed")
+    _emit(progress_callback, ticker, "strategy", "started")
     strategy = suggest_trading_strategy(
         ticker,
         stock,
@@ -88,6 +131,7 @@ def analyze_selected_stock(
         news_data=news,
         lang=lang,
     )
+    _emit(progress_callback, ticker, "strategy", "failed" if strategy.get("error") else "completed")
     return {
         "ticker": ticker,
         "short_term": {
@@ -107,11 +151,23 @@ def analyze_selected_stock(
         "options": options,
         "options_plan": options_plan,
         "session_ranges": session_ranges,
-        "validation": validation,
+        "validation": {"available": False, "reason": "not_run"},
         "news": news,
         "quant_score": stock.get("total_score"),
         "risk_adjusted_score": stock.get("risk_adjusted_score"),
     }
+
+
+def _emit(callback: Optional[ProgressCallback], ticker: str, stage: str, state: str) -> None:
+    _safe_callback(callback, {"ticker": ticker, "stage": stage, "state": state, "timestamp": time.monotonic()})
+
+
+def _safe_callback(callback: Optional[ProgressCallback], event: Dict[str, Any]) -> None:
+    if callback:
+        try:
+            callback(event)
+        except Exception:
+            pass
 
 
 def _short_term_score(stock: Dict[str, Any], technical: Dict[str, Any]) -> float:

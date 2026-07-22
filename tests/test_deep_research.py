@@ -1,4 +1,5 @@
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
@@ -48,7 +49,6 @@ def test_analyze_ticker_fetches_only_requested_stock(monkeypatch) -> None:
     monkeypatch.setattr(deep_research, "fetch_news", lambda *args, **kwargs: [])
     monkeypatch.setattr(deep_research, "fetch_options_chain", lambda *args, **kwargs: {"error": "none"})
     monkeypatch.setattr(deep_research, "fetch_trading_session_ranges", lambda *args, **kwargs: {"sessions": {}})
-    monkeypatch.setattr(deep_research, "run_our_picks_validation", lambda *args, **kwargs: {"available": True, "sample_count": 12})
     monkeypatch.setattr(deep_research, "suggest_trading_strategy", lambda *args, **kwargs: {"reasoning": "ok"})
 
     result = deep_research.analyze_ticker("AAPL")
@@ -109,3 +109,51 @@ def test_analyze_tickers_keeps_partial_failures(monkeypatch) -> None:
     assert results["AAPL"] == {"ticker": "AAPL"}
     assert results["BAD"]["stage"] == "unexpected"
     assert results["MSFT"] == {"ticker": "MSFT"}
+
+
+def test_analyze_tickers_runs_in_parallel_and_preserves_order(monkeypatch) -> None:
+    def analyze(ticker, **kwargs):
+        time.sleep(0.1)
+        return {"ticker": ticker}
+
+    monkeypatch.setattr(deep_research, "analyze_ticker", analyze)
+    started = time.monotonic()
+
+    results = deep_research.analyze_tickers(["AAPL", "MSFT", "NVDA"])
+
+    assert time.monotonic() - started < 0.25
+    assert list(results) == ["AAPL", "MSFT", "NVDA"]
+
+
+def test_analyze_ticker_emits_stage_progress(monkeypatch) -> None:
+    events = []
+    monkeypatch.setattr(deep_research, "fetch_stock_data", lambda *args, **kwargs: {
+        "ticker": "AAPL", "revenue_growth": 20, "eps_growth": 20, "profit_margin": 20,
+        "peg": 1, "roe": 20, "debt_equity": 0.5,
+    })
+    monkeypatch.setattr(deep_research, "compute_technical_indicators", lambda *args, **kwargs: {
+        "technical_score": 70, "price": 100, "risk_metrics": {"available": False},
+        "ema_9": 101, "ema_21": 100, "ema_50": 95, "sma_50": 96, "adx_14": 25,
+    })
+    monkeypatch.setattr(deep_research, "fetch_news", lambda *args, **kwargs: [])
+    monkeypatch.setattr(deep_research, "fetch_options_chain", lambda *args, **kwargs: {"error": "none"})
+    monkeypatch.setattr(deep_research, "fetch_trading_session_ranges", lambda *args, **kwargs: {"sessions": {}})
+    monkeypatch.setattr(deep_research, "suggest_trading_strategy", lambda *args, **kwargs: {"reasoning": "ok"})
+
+    deep_research.analyze_ticker("AAPL", progress_callback=events.append)
+
+    completed = {event["stage"] for event in events if event["state"] == "completed"}
+    assert completed == {"fundamental", "technical", "market_data", "strategy"}
+
+
+def test_batch_progress_completes_ticker_after_stage_events(monkeypatch) -> None:
+    def analyze(ticker, progress_callback=None, **kwargs):
+        progress_callback({"ticker": ticker, "stage": "strategy", "state": "completed"})
+        return {"ticker": ticker}
+
+    events = []
+    monkeypatch.setattr(deep_research, "analyze_ticker", analyze)
+
+    deep_research.analyze_tickers(["AAPL"], progress_callback=events.append)
+
+    assert events[-1] == {"ticker": "AAPL", "stage": "ticker", "state": "completed"}

@@ -25,7 +25,7 @@ def _get_client() -> Optional[OpenAI]:
         return _CLIENT
     if not _API_KEY or not _BASE_URL:
         return None
-    _CLIENT = OpenAI(api_key=_API_KEY, base_url=_BASE_URL, timeout=45.0, max_retries=2)
+    _CLIENT = OpenAI(api_key=_API_KEY, base_url=_BASE_URL, timeout=15.0, max_retries=0)
     return _CLIENT
 
 

@@ -13,7 +13,7 @@ APP_PATH = str(Path(__file__).resolve().parents[1] / "backend" / "app.py")
 
 
 def test_primary_routes_render_without_exceptions() -> None:
-    for route in ("home", "scan", "picks", "portfolio"):
+    for route in ("home", "scan", "picks", "picks_news", "portfolio"):
         app = AppTest.from_file(APP_PATH, default_timeout=30)
         app.session_state["app_route"] = route
 

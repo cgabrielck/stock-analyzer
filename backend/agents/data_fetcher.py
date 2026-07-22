@@ -1,10 +1,13 @@
 import concurrent.futures
-from datetime import date, datetime
+from datetime import date, datetime, timezone
+import hashlib
 import json
 import os
+import re
 from typing import Any, Callable, Dict, Optional
 
 import yfinance as yf
+import pandas as pd
 import requests
 
 from utils.constants import STOCK_UNIVERSE, SEC_HEADERS, DATA_DIR
@@ -534,7 +537,7 @@ def _extract_news(item: dict) -> dict:
     content = item.get("content") or item
     title = content.get("title", "")
     summary = (content.get("summary", "") or content.get("description", ""))
-    publisher = ""
+    publisher = content.get("publisher", "") or item.get("publisher", "")
     provider = content.get("provider")
     if provider:
         publisher = provider.get("displayName", "") or provider.get("name", "")
@@ -546,41 +549,156 @@ def _extract_news(item: dict) -> dict:
         click = content.get("clickThroughUrl")
         if click:
             link = click.get("url", "")
-    return {"title": title, "summary": summary, "publisher": publisher, "link": link}
+    link = link or content.get("link", "") or item.get("link", "")
+    published = content.get("pubDate") or content.get("displayTime") or item.get("providerPublishTime")
+    published_at = _normalize_news_time(published)
+    article_id = str(content.get("id") or item.get("uuid") or "")
+    if not article_id:
+        article_id = hashlib.sha256(f"{link}|{title}".encode("utf-8")).hexdigest()[:20]
+    return {
+        "id": article_id,
+        "title": title,
+        "summary": summary,
+        "publisher": publisher,
+        "link": link,
+        "published_at": published_at,
+        "content_type": content.get("contentType") or item.get("type"),
+    }
 
 
-def fetch_news(ticker: str, max_items: int = 5) -> list[dict[str, Any]]:
-    cached = cache.get(f"news_{ticker}", "info")
-    if cached:
-        return cached
+def fetch_news(ticker: str, max_items: int = 5, force_refresh: bool = False) -> list[dict[str, Any]]:
+    cache_key = f"news_v2_{ticker}"
+    cached = None if force_refresh else cache.get(cache_key, "info", ttl=900)
+    if cached is not None:
+        return cached[:max_items]
 
     try:
         stock = yf.Ticker(ticker, session=_REQUEST_SESSION)
         raw_news = stock.news
         if not raw_news:
+            cache.set(cache_key, "info", [], ttl=300)
             return []
     except Exception as e:
         agent_state.log_source_result(f"news:{ticker}", False, str(e))
         return []
 
     result: list[dict[str, Any]] = []
-    for item in raw_news[:max_items]:
+    seen = set()
+    for item in raw_news[:20]:
         parsed = _extract_news(item)
         title = parsed["title"]
+        if not title or parsed["id"] in seen or not _news_is_relevant(ticker, title, parsed["summary"]):
+            continue
+        seen.add(parsed["id"])
         summary = parsed["summary"]
         sentiment = _analyze_news_sentiment(title, summary)
         result.append({
             "ticker": ticker,
+            "id": parsed["id"],
             "title": title,
-            "summary": summary[:300],
+            "summary": summary,
             "publisher": parsed["publisher"],
             "link": parsed["link"],
             "sentiment": sentiment,
+            "published_at": parsed["published_at"],
+            "content_type": parsed["content_type"],
+            "source": "yahoo",
         })
 
+    result.sort(key=lambda article: article.get("published_at") or "", reverse=True)
     agent_state.log_source_result(f"news:{ticker}", True)
-    cache.set(f"news_{ticker}", "info", result)
+    cache.set(cache_key, "info", result, ttl=900)
+    return result[:max_items]
+
+
+def _news_is_relevant(ticker: str, title: str, summary: str) -> bool:
+    text = f"{title} {summary}".lower()
+    aliases = {ticker.lower()}
+    metadata = next((stock for stock in STOCK_UNIVERSE if stock["ticker"] == ticker), {})
+    english_name = str(metadata.get("name_en") or "").lower()
+    if english_name:
+        aliases.add(english_name)
+        core_name = re.sub(r"\b(inc|corp|corporation|company|holdings|ltd|plc)\.?\b", "", english_name).strip()
+        if len(core_name) >= 3:
+            aliases.add(core_name)
+        first_word = core_name.split()[0] if core_name else ""
+        if len(first_word) >= 4:
+            aliases.add(first_word)
+    return any(re.search(rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])", text) for alias in aliases if alias)
+
+
+def fetch_next_earnings(ticker: str, force_refresh: bool = False) -> Dict[str, Any]:
+    cache_key = f"earnings_calendar_v2_{ticker}"
+    cached = None if force_refresh else cache.get(cache_key, "info", ttl=21600)
+    if cached is not None:
+        return cached
+    stock = yf.Ticker(ticker, session=_REQUEST_SESSION)
+    result: Dict[str, Any] = {"available": False, "source": None}
+    try:
+        calendar = stock.calendar
+        dates = _calendar_earnings_dates(calendar)
+        future = [value for value in dates if value >= date.today()]
+        if future:
+            result = _earnings_result(future, "yahoo_calendar")
+    except Exception as exc:
+        result["calendar_error"] = str(exc)
+    if not result.get("available"):
+        try:
+            dates_frame = stock.get_earnings_dates(limit=12)
+            if dates_frame is not None and not dates_frame.empty:
+                dates = [timestamp.date() for timestamp in pd.to_datetime(dates_frame.index, utc=True)]
+                future = [value for value in dates if value >= date.today()]
+                if future:
+                    result = _earnings_result(future, "yahoo_earnings_dates")
+        except Exception as exc:
+            result["fallback_error"] = str(exc)
+    cache.set(cache_key, "info", result, ttl=21600)
     return result
+
+
+def _normalize_news_time(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    try:
+        if isinstance(value, (int, float)):
+            return datetime.fromtimestamp(float(value), tz=timezone.utc).isoformat()
+        parsed = pd.to_datetime(value, utc=True)
+        return parsed.isoformat() if not pd.isna(parsed) else None
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _calendar_earnings_dates(calendar: Any) -> list[date]:
+    values: Any = None
+    if isinstance(calendar, dict):
+        values = calendar.get("Earnings Date")
+    elif isinstance(calendar, pd.DataFrame) and "Earnings Date" in calendar.index:
+        values = calendar.loc["Earnings Date"]
+    if values is None:
+        return []
+    if not isinstance(values, (list, tuple, pd.Series, pd.Index)):
+        values = [values]
+    result = []
+    for value in values:
+        try:
+            parsed = pd.Timestamp(value)
+            result.append(parsed.date())
+        except (TypeError, ValueError):
+            continue
+    return sorted(set(result))
+
+
+def _earnings_result(dates: list[date], source: str) -> Dict[str, Any]:
+    start, end = min(dates), max(dates)
+    return {
+        "available": True,
+        "date_start": start.isoformat(),
+        "date_end": end.isoformat(),
+        "next_date": start.isoformat(),
+        "days_until": (start - date.today()).days,
+        "precision": "exact" if start == end else "range",
+        "source": source,
+    }
 
 
 def fetch_financials_history(ticker: str) -> dict[str, list[float]]:

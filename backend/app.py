@@ -224,6 +224,11 @@ def init_state() -> None:
         "picks_analyzed_tickers": [],
         "picks_analyzed_at": None,
         "picks_run_error": None,
+        "picks_news_selection_widget": [],
+        "picks_news_results": {},
+        "picks_news_analyzed_tickers": [],
+        "picks_news_analyzed_at": None,
+        "picks_news_status": "idle",
         "scan_view": "overview",
         "scan_filter_tickers": [],
     }
@@ -1768,7 +1773,7 @@ def render_home_tab(lang: str) -> None:
         f"<div class='proof-strip'><div class='proof-item'><div class='proof-value'>{len(STOCK_UNIVERSE)}</div><div class='proof-label'>{t('landing.stocks', lang)}</div></div>"
         f"<div class='proof-item'><div class='proof-value'>14</div><div class='proof-label'>{t('landing.sectors', lang)}</div></div>"
         f"<div class='proof-item'><div class='proof-value'>5</div><div class='proof-label'>{t('landing.max_picks', lang)}</div></div>"
-        f"<div class='proof-item'><div class='proof-value'>92</div><div class='proof-label'>{t('landing.tests', lang)}</div></div></div>",
+        f"<div class='proof-item'><div class='proof-value'>99</div><div class='proof-label'>{t('landing.tests', lang)}</div></div></div>",
         unsafe_allow_html=True,
     )
 
@@ -1845,6 +1850,102 @@ def render_our_picks_page(lang: str, force_refresh: bool = False) -> None:
             st.caption(t("deep.analyzed_at", lang, time=st.session_state.picks_analyzed_at))
         for ticker, result in results.items():
             _render_deep_research_result(ticker, result, lang)
+
+
+def _import_picks_to_news() -> None:
+    tickers = st.session_state.get("picks_selection_widget") or st.session_state.get("picks_analyzed_tickers") or []
+    st.session_state["picks_news_selection_widget"] = list(tickers)[:5]
+
+
+def render_picks_news_page(lang: str, force_refresh: bool = False) -> None:
+    st.subheader(t("picks_news.title", lang))
+    st.caption(t("picks_news.desc", lang))
+    stock_by_ticker = {stock["ticker"]: stock for stock in STOCK_UNIVERSE}
+    if not st.session_state.get("picks_news_selection_widget") and st.session_state.get("picks_selection_widget"):
+        st.session_state.picks_news_selection_widget = list(st.session_state.picks_selection_widget)[:5]
+    selected = st.multiselect(
+        t("picks_news.selector", lang), list(stock_by_ticker), max_selections=5,
+        format_func=lambda ticker: f"{ticker} — {_stock_name(stock_by_ticker[ticker], lang)}",
+        key="picks_news_selection_widget",
+    )
+    import_col, run_col = st.columns(2)
+    with import_col:
+        st.button(t("picks_news.import", lang), width="stretch", on_click=_import_picks_to_news, key="picks_news_import")
+    with run_col:
+        run_news = st.button(t("picks_news.run", lang), type="primary", width="stretch", disabled=not selected, key="picks_news_run")
+    include_ai = st.checkbox(t("picks_news.include_ai", lang), value=True, key="picks_news_include_ai")
+    if run_news:
+        from agents.picks_news import analyze_picks_news
+
+        st.session_state.picks_news_status = "running"
+        progress = st.progress(0, text=t("picks_news.running", lang))
+
+        def update(ticker: str, completed: int, total: int) -> None:
+            progress.progress(completed / total if total else 0, text=f"{ticker} ({completed + 1}/{total})")
+
+        try:
+            results = analyze_picks_news(selected, lang, force_refresh, include_ai, progress_callback=update)
+            st.session_state.picks_news_results = results
+            st.session_state.picks_news_analyzed_tickers = list(selected)
+            st.session_state.picks_news_analyzed_at = pd.Timestamp.now(tz="UTC").isoformat()
+            st.session_state.picks_news_status = "success"
+            progress.progress(1.0, text=t("picks_news.complete", lang))
+        except Exception as exc:
+            st.session_state.picks_news_status = "error"
+            st.error(t("app.error", lang, msg=str(exc)))
+        finally:
+            progress.empty()
+    results = st.session_state.get("picks_news_results", {})
+    if results:
+        if set(selected) != set(st.session_state.get("picks_news_analyzed_tickers", [])):
+            st.warning(t("picks_news.stale", lang))
+        st.markdown("---")
+        for ticker, result in results.items():
+            _render_picks_news_result(ticker, result, lang)
+
+
+def _render_picks_news_result(ticker: str, result: Dict[str, Any], lang: str) -> None:
+    with st.expander(f"{ticker} — {t('picks_news.latest', lang)}", expanded=True):
+        earnings = result.get("earnings", {})
+        if earnings.get("available"):
+            date_text = earnings.get("next_date", "N/A")
+            if earnings.get("precision") == "range":
+                date_text = f"{earnings.get('date_start')} – {earnings.get('date_end')}"
+            st.info(t(
+                "picks_news.earnings_event", lang, date=date_text,
+                days=earnings.get("days_until", "N/A"), precision=t(f"picks_news.{earnings.get('precision', 'unknown')}", lang),
+            ))
+        else:
+            st.caption(t("picks_news.no_earnings", lang))
+        errors = result.get("errors", {})
+        if result.get("status") == "partial":
+            st.warning(t("picks_news.partial", lang))
+        items = result.get("items", [])
+        if not items:
+            st.info(t("picks_news.no_articles", lang))
+            return
+        for article in items:
+            impact = article.get("impact", {})
+            published = article.get("published_at")
+            published_text = pd.Timestamp(published).strftime("%Y-%m-%d %H:%M UTC") if published else t("deep.unavailable", lang)
+            st.markdown(f"### {html.escape(article.get('title', ''))}")
+            st.caption(f"{article.get('publisher') or 'Yahoo'} · {published_text} · {t('picks_news.source', lang)}: {article.get('source', 'yahoo')}")
+            if article.get("summary"):
+                st.write(article["summary"][:900])
+            impact_cols = st.columns(4)
+            impact_cols[0].metric(t("picks_news.direction", lang), t(f"picks_news.{impact.get('direction', 'neutral')}", lang))
+            impact_cols[1].metric(t("picks_news.magnitude", lang), t(f"picks_news.{impact.get('magnitude', 'low')}", lang))
+            impact_cols[2].metric(t("picks_news.horizon", lang), t(f"picks_news.{impact.get('horizon', 'short_term')}", lang))
+            impact_cols[3].metric(t("picks_news.confidence", lang), f"{impact.get('confidence', 0)}%")
+            st.caption(f"{t('picks_news.event_type', lang)}: {t(f'picks_news.event_{impact.get("event_type", "other")}', lang)} · {t('picks_news.analysis_source', lang)}: {t(f'picks_news.source_{article.get("analysis_source", "rules")}', lang)}")
+            if impact.get("thesis"):
+                st.write(impact["thesis"])
+            if article.get("link"):
+                st.link_button(t("news.view", lang), article["link"])
+            st.markdown("---")
+        if errors.get("ai"):
+            st.caption(t("picks_news.ai_fallback", lang))
+        st.caption(t("picks_news.disclaimer", lang))
 
 
 
@@ -2251,11 +2352,12 @@ def build_minimal_sidebar() -> Dict[str, Any]:
 
 
 def render_primary_navigation(lang: str) -> None:
-    home, scan, picks, portfolio = st.columns(4)
+    home, scan, picks, picks_news, portfolio = st.columns(5)
     actions = [
         (home, "home", t("nav.home", lang)),
         (scan, "scan", t("nav.scan", lang)),
         (picks, "picks", t("nav.picks", lang)),
+        (picks_news, "picks_news", t("nav.picks_news", lang)),
         (portfolio, "portfolio", t("portfolio.title", lang)),
     ]
     for column, route, label in actions:
@@ -2362,6 +2464,9 @@ try {
     elif route == "picks":
         params = build_minimal_sidebar()
         render_our_picks_page(lang, force_refresh=params["force_refresh"])
+    elif route == "picks_news":
+        params = build_minimal_sidebar()
+        render_picks_news_page(lang, force_refresh=params["force_refresh"])
     elif route == "portfolio":
         build_minimal_sidebar()
         render_portfolio_tab()

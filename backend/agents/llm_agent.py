@@ -478,6 +478,75 @@ def suggest_trading_strategy(
         return {"error": str(e)}
 
 
+def analyze_news_impact(
+    ticker: str,
+    article: Dict[str, Any],
+    earnings: Optional[Dict[str, Any]] = None,
+    lang: str = "zh_tw",
+) -> Dict[str, Any]:
+    client = _get_client()
+    if client is None:
+        return {"error": "LLM not configured"}
+    language = {"zh_cn": "Simplified Chinese", "zh_tw": "Traditional Chinese", "en": "English"}.get(lang, "Traditional Chinese")
+    prompt = f"""Analyze how this news may affect {ticker}. Separate reported facts from inference. Do not predict a guaranteed price move.
+Language: {language}
+Title: {article.get('title', '')}
+Summary: {article.get('summary', '')[:1200]}
+Publisher: {article.get('publisher', '')}
+Published: {article.get('published_at', '')}
+Upcoming earnings context: {json.dumps(earnings or {}, ensure_ascii=False)}
+
+Return JSON only:
+{{
+  "direction": "positive|neutral|negative|mixed",
+  "magnitude": "low|medium|high",
+  "horizon": "intraday|short_term|long_term",
+  "event_type": "earnings|guidance|product|analyst_action|regulatory|litigation|m_and_a|management|macro|other",
+  "thesis": "concise analysis",
+  "key_risks": ["..."],
+  "key_catalysts": ["..."],
+  "confidence": <integer 0-100>
+}}"""
+    try:
+        response = _create_completion(
+            client,
+            "news_impact",
+            messages=[
+                {"role": "system", "content": "You are a cautious equity news analyst. Return valid JSON and never invent facts."},
+                {"role": "user", "content": prompt},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.2,
+            max_tokens=600,
+        )
+        parsed = json.loads(response.choices[0].message.content.strip())
+        return _normalize_news_impact(parsed)
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+def _normalize_news_impact(value: Dict[str, Any]) -> Dict[str, Any]:
+    allowed = {
+        "direction": {"positive", "neutral", "negative", "mixed"},
+        "magnitude": {"low", "medium", "high"},
+        "horizon": {"intraday", "short_term", "long_term"},
+        "event_type": {"earnings", "guidance", "product", "analyst_action", "regulatory", "litigation", "m_and_a", "management", "macro", "other"},
+    }
+    result = {}
+    defaults = {"direction": "neutral", "magnitude": "low", "horizon": "short_term", "event_type": "other"}
+    for key, choices in allowed.items():
+        candidate = str(value.get(key, defaults[key])).lower()
+        result[key] = candidate if candidate in choices else defaults[key]
+    result["thesis"] = str(value.get("thesis", ""))[:800]
+    result["key_risks"] = [str(item)[:300] for item in value.get("key_risks", [])[:3]] if isinstance(value.get("key_risks"), list) else []
+    result["key_catalysts"] = [str(item)[:300] for item in value.get("key_catalysts", [])[:3]] if isinstance(value.get("key_catalysts"), list) else []
+    try:
+        result["confidence"] = max(0, min(100, int(value.get("confidence", 0))))
+    except (TypeError, ValueError):
+        result["confidence"] = 0
+    return result
+
+
 _SEC_SUMMARY_SYSTEM_PROMPT = """You are an expert financial analyst. Given the raw text from a company's SEC filing (10-K or 10-Q), produce an extremely concise summary in the user's specified language.
 
 Rules:

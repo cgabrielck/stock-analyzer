@@ -184,8 +184,11 @@ def build_portfolio(
     recommendations: List[Dict[str, Any]],
     total_capital: float = 100000.0,
     target_allocation: float = TOTAL_ALLOCATION,
+    previous_state: Optional[Dict[str, Any]] = None,
+    journal: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    saved = _load_portfolio_state()
+    saved = previous_state or {}
+    updated_journal = list(journal or [])
     old_positions = saved.get("positions", {})
     all_tickers = [r["ticker"] for r in recommendations]
     corr, high_pairs = compute_correlations(all_tickers)
@@ -208,7 +211,11 @@ def build_portfolio(
         entry_date = old.get("entry_date", datetime.now().isoformat())
 
         if not old:
-            log_trade(ticker, "buy", price, shares, f"Portfolio allocation {weight*100:.1f}%")
+            updated_journal.append({
+                "date": datetime.now().isoformat(), "ticker": ticker, "action": "buy",
+                "price": round(price, 2), "shares": shares,
+                "reason": f"Portfolio allocation {weight*100:.1f}%",
+            })
 
         target = r.get("target_mean_price")
         beta = r.get("beta")
@@ -246,16 +253,15 @@ def build_portfolio(
     positions.sort(key=lambda p: p["weight"], reverse=True)
     total_invested = sum(p["entry_price"] * p["shares"] for p in positions)
     total_pnl = sum(p["pnl"] for p in positions)
-    portfolio_value = total_invested + total_pnl
+    holdings_value = total_invested + total_pnl
     cash = total_capital - total_invested
+    portfolio_value = cash + holdings_value
 
     new_state = {
         "positions": {p["ticker"]: {"entry_price": p["entry_price"], "entry_date": p["entry_date"]} for p in positions},
         "capital": total_capital,
         "updated_at": datetime.now().isoformat(),
     }
-    _save_portfolio_state(new_state)
-
     missing_risk = [position["ticker"] for position in positions if not position["risk_metrics"].get("available")]
     if missing_risk:
         risk_by_ticker = fetch_risk_metrics(missing_risk)
@@ -275,6 +281,8 @@ def build_portfolio(
         "correlation_df": corr,
         "num_positions": len(positions),
         "weighting_method": weighting_method,
+        "session_state": new_state,
+        "journal": updated_journal,
     }
 
 

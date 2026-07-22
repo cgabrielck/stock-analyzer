@@ -2,13 +2,15 @@
 
 [![Live App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://stock-analyzergit-ijue4vuwb7kuvizn62fema.streamlit.app/)
 [![Python](https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white)](https://python.org)
-[![Tests](https://img.shields.io/badge/tests-67%20passing-22d3c5)](#testing--測試)
+[![Tests](https://img.shields.io/badge/tests-pytest-22d3c5)](#testing--測試)
 
 > A risk-aware US equity research terminal combining fundamental quality, technical signals, active-session prices, market-regime controls, walk-forward backtesting, portfolio sizing, and optional LLM analysis.
 >
 > 風險調整型美股研究終端，整合基本面、技術訊號、即時交易時段價格、市場狀態、walk-forward 回測、倉位管理與選用的 LLM 分析。
 
 **Live application / 線上版本:** [stock-analyzergit-ijue4vuwb7kuvizn62fema.streamlit.app](https://stock-analyzergit-ijue4vuwb7kuvizn62fema.streamlit.app/)
+
+Quality grades, architecture decisions, and the phased enhancement plan are tracked in [docs/QUALITY_ROADMAP.md](docs/QUALITY_ROADMAP.md).
 
 ## What It Does / 系統功能
 

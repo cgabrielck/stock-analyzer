@@ -11,6 +11,7 @@ from agents.portfolio_manager import (
     calculate_portfolio_weights,
     compute_correlations,
     normalize_capped_weights,
+    build_portfolio,
 )
 
 
@@ -90,3 +91,17 @@ def test_positive_correlation_is_flagged(monkeypatch) -> None:
     _, high_pairs = compute_correlations(["A", "B"])
 
     assert high_pairs == [("A", "B", 1.0)]
+
+
+def test_portfolio_uses_supplied_session_state_and_includes_cash(monkeypatch) -> None:
+    monkeypatch.setattr(portfolio_manager, "compute_correlations", lambda tickers: (None, []))
+    monkeypatch.setattr(portfolio_manager, "load_calibration_snapshot", lambda: {})
+    recommendations = [{"ticker": "A", "total_score": 80, "price": 100, "risk_metrics": {"available": True}}]
+
+    first = build_portfolio(recommendations, total_capital=1000, target_allocation=0.5, previous_state={}, journal=[])
+    second = build_portfolio(recommendations, total_capital=1000, target_allocation=0.5, previous_state={}, journal=[])
+
+    assert first["portfolio_value"] == 1000
+    assert len(first["journal"]) == 1
+    assert len(second["journal"]) == 1
+    assert first["session_state"] is not second["session_state"]

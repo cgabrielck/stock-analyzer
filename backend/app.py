@@ -35,21 +35,12 @@ WEIGHT_LABELS: Dict[str, str] = {
 
 
 def _load_custom_tickers() -> List[str]:
-    try:
-        if os.path.exists(CUSTOM_TICKERS_PATH):
-            with open(CUSTOM_TICKERS_PATH) as f:
-                data = json.load(f)
-                if isinstance(data, list):
-                    return data
-    except Exception:
-        pass
+    # Public deployments keep user-specific symbols in Streamlit session state only.
     return []
 
 
 def _save_custom_tickers(tickers: List[str]) -> None:
-    os.makedirs(os.path.dirname(CUSTOM_TICKERS_PATH), exist_ok=True)
-    with open(CUSTOM_TICKERS_PATH, "w") as f:
-        json.dump(tickers, f)
+    return None
 
 
 def _stock_name(s: Dict[str, Any], lang: str) -> str:
@@ -217,6 +208,8 @@ def init_state() -> None:
         "custom_tickers": _load_custom_tickers(),
         "lang": "zh_tw",
         "portfolio": {},
+        "portfolio_state": {},
+        "portfolio_journal": [],
         "market_regime": {},
         "picks_status": "idle",
         "picks_results": {},
@@ -337,14 +330,14 @@ def build_sidebar() -> Dict[str, Any]:
 
     if st.session_state.custom_tickers:
         tags_html = "".join(
-            f'<span class="stock-tag">{t_}</span>'
+            f'<span class="stock-tag">{html.escape(t_)}</span>'
             for t_ in st.session_state.custom_tickers
         )
         st.sidebar.markdown(f"<div style='margin:4px 0;'>{tags_html}</div>", unsafe_allow_html=True)
         for t_ in list(st.session_state.custom_tickers):
             col_a, col_b = st.sidebar.columns([5, 1])
             with col_a:
-                st.markdown(f"<span style='font-size:0.75rem;'>{t_}</span>", unsafe_allow_html=True)
+                st.markdown(f"<span style='font-size:0.75rem;'>{html.escape(t_)}</span>", unsafe_allow_html=True)
             with col_b:
                 if st.button("Remove", key=f"remove_{t_}", help=t("sidebar.custom_remove", selected_lang), width="stretch"):
                     st.session_state.custom_tickers.remove(t_)
@@ -506,7 +499,11 @@ def run_analysis(params: Dict[str, Any]) -> None:
         st.session_state.recommendations,
         total_capital=params.get("portfolio_capital", 100000),
         target_allocation=st.session_state.market_regime.get("target_allocation", 0.90),
+        previous_state=st.session_state.get("portfolio_state", {}),
+        journal=st.session_state.get("portfolio_journal", []),
     )
+    st.session_state.portfolio_state = st.session_state.portfolio.pop("session_state", {})
+    st.session_state.portfolio_journal = st.session_state.portfolio.pop("journal", [])
 
     if results.get("error"):
         st.error(t("app.error", lang, msg=results["error"]))
@@ -1242,6 +1239,8 @@ def _render_deep_research_result(ticker: str, result: Dict[str, Any], lang: str)
     technical = result.get("technical", {})
     validation = result.get("validation", {})
     with st.expander(f"{ticker} — {t('deep.research', lang)}", expanded=True):
+        if result.get("enrichment_errors"):
+            st.warning(t("deep.partial_enrichment", lang))
         cols = st.columns(4)
         cols[0].metric(t("deep.short", lang), f"{short.get('score', 0):.1f}", short.get("view", "neutral").upper())
         cols[1].metric(t("deep.long", lang), f"{long.get('score', 0):.1f}", long.get("view", "neutral").upper())
@@ -1785,7 +1784,7 @@ def render_home_tab(lang: str) -> None:
         f"<div class='proof-strip'><div class='proof-item'><div class='proof-value'>{len(STOCK_UNIVERSE)}</div><div class='proof-label'>{t('landing.stocks', lang)}</div></div>"
         f"<div class='proof-item'><div class='proof-value'>14</div><div class='proof-label'>{t('landing.sectors', lang)}</div></div>"
         f"<div class='proof-item'><div class='proof-value'>5</div><div class='proof-label'>{t('landing.max_picks', lang)}</div></div>"
-        f"<div class='proof-item'><div class='proof-value'>103</div><div class='proof-label'>{t('landing.tests', lang)}</div></div></div>",
+        f"<div class='proof-item'><div class='proof-value'>{t('landing.session_value', lang)}</div><div class='proof-label'>{t('landing.session_private', lang)}</div></div></div>",
         unsafe_allow_html=True,
     )
 
@@ -2349,8 +2348,7 @@ def render_portfolio_tab() -> None:
     st.dataframe(pd.DataFrame(pos_rows), hide_index=True, width="stretch", height=400)
 
     with st.expander(t("portfolio.journal", lang)):
-        from agents.portfolio_manager import get_journal
-        journal = get_journal()
+        journal = st.session_state.get("portfolio_journal", [])
         if journal:
             import pandas as _pd
             st.dataframe(_pd.DataFrame(journal), hide_index=True, width="stretch", height=300)
@@ -2358,9 +2356,9 @@ def render_portfolio_tab() -> None:
             st.caption(t("portfolio.journal_empty", lang))
 
     if st.button(t("portfolio.reset", lang), type="secondary"):
-        from agents.portfolio_manager import reset_portfolio
-        reset_portfolio(capital=st.session_state.get("portfolio_capital", 100000))
         st.session_state.portfolio = {}
+        st.session_state.portfolio_state = {}
+        st.session_state.portfolio_journal = []
         st.rerun()
 
 

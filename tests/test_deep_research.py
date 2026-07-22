@@ -157,3 +157,36 @@ def test_batch_progress_completes_ticker_after_stage_events(monkeypatch) -> None
     deep_research.analyze_tickers(["AAPL"], progress_callback=events.append)
 
     assert events[-1] == {"ticker": "AAPL", "stage": "ticker", "state": "completed"}
+
+
+def test_batch_deadline_returns_timeout_without_waiting_for_worker(monkeypatch) -> None:
+    def analyze(*args, **kwargs):
+        time.sleep(0.2)
+        return {"ticker": "AAPL"}
+
+    monkeypatch.setattr(deep_research, "analyze_ticker", analyze)
+    started = time.monotonic()
+
+    result = deep_research.analyze_tickers(["AAPL"], batch_timeout_seconds=0.03)
+
+    assert time.monotonic() - started < 0.15
+    assert result["AAPL"]["stage"] == "timeout"
+
+
+def test_market_data_timeout_keeps_core_result(monkeypatch) -> None:
+    stock = {"ticker": "AAPL", "growth_score": 70, "risk_penalty": 0, "metrics_used": 6}
+    technical = {
+        "technical_score": 70, "price": 100, "risk_metrics": {"available": False},
+        "ema_9": 101, "ema_21": 100, "ema_50": 95, "sma_50": 96, "adx_14": 25,
+    }
+    monkeypatch.setattr(deep_research, "MARKET_DATA_TIMEOUT_SECONDS", 0.02)
+    monkeypatch.setattr(deep_research, "fetch_options_chain", lambda *args, **kwargs: time.sleep(0.1) or {})
+    monkeypatch.setattr(deep_research, "fetch_trading_session_ranges", lambda *args, **kwargs: {"sessions": {}})
+    monkeypatch.setattr(deep_research, "fetch_news", lambda *args, **kwargs: [])
+    monkeypatch.setattr(deep_research, "suggest_trading_strategy", lambda *args, **kwargs: {"reasoning": "ok"})
+
+    result = deep_research.analyze_selected_stock(stock, technical=technical)
+
+    assert result["ticker"] == "AAPL"
+    assert result["options"]["error"] == "provider_timeout"
+    assert result["trade_plan"]["action"] == "buy"

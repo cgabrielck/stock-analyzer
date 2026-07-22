@@ -17,6 +17,7 @@ from utils.constants import STOCK_UNIVERSE
 
 
 ProgressCallback = Callable[[Dict[str, Any]], None]
+MARKET_DATA_TIMEOUT_SECONDS = 12.0
 
 
 def analyze_ticker(
@@ -65,6 +66,7 @@ def analyze_tickers(
     lang: str = "zh_tw",
     force_refresh: bool = False,
     progress_callback: Optional[ProgressCallback] = None,
+    batch_timeout_seconds: float = 90.0,
 ) -> Dict[str, Dict[str, Any]]:
     unordered: Dict[str, Dict[str, Any]] = {}
     events: queue.Queue[Dict[str, Any]] = queue.Queue()
@@ -75,12 +77,15 @@ def analyze_tickers(
         except Exception as exc:
             return {"ticker": ticker, "error": str(exc), "stage": "unexpected"}
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(3, len(tickers) or 1)) as executor:
+    started_at = time.monotonic()
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=min(3, len(tickers) or 1))
+    try:
         futures = {executor.submit(analyze, ticker): ticker for ticker in tickers}
         pending = set(futures)
-        while pending:
+        while pending and time.monotonic() - started_at < batch_timeout_seconds:
+            remaining_seconds = max(0.0, batch_timeout_seconds - (time.monotonic() - started_at))
             try:
-                event = events.get(timeout=0.2)
+                event = events.get(timeout=min(0.2, remaining_seconds))
                 _safe_callback(progress_callback, event)
             except queue.Empty:
                 _safe_callback(progress_callback, {"ticker": None, "stage": "heartbeat", "state": "running"})
@@ -92,8 +97,15 @@ def analyze_tickers(
                 unordered[ticker] = future.result()
                 _safe_callback(progress_callback, {"ticker": ticker, "stage": "ticker", "state": "completed"})
             pending -= completed
+        for future in pending:
+            ticker = futures[future]
+            future.cancel()
+            unordered[ticker] = {"ticker": ticker, "error": "analysis_timeout", "stage": "timeout"}
+            _safe_callback(progress_callback, {"ticker": ticker, "stage": "ticker", "state": "failed"})
         while not events.empty():
             _safe_callback(progress_callback, events.get_nowait())
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
     return {ticker: unordered[ticker] for ticker in tickers}
 
 
@@ -112,13 +124,32 @@ def analyze_selected_stock(
     trade_plan = _build_trade_plan(stock, technical, short_score, long_score, avoid)
     current_price = technical.get("price") or stock.get("price") or 0
     _emit(progress_callback, ticker, "market_data", "started")
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-        options_future = executor.submit(fetch_options_chain, ticker, current_price=current_price)
-        sessions_future = executor.submit(fetch_trading_session_ranges, ticker)
-        news_future = executor.submit(fetch_news, ticker, 5)
-        options = options_future.result()
-        session_ranges = sessions_future.result()
-        news = news_future.result()
+    provider_executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
+    provider_futures = {
+        "options": provider_executor.submit(fetch_options_chain, ticker, current_price=current_price),
+        "sessions": provider_executor.submit(fetch_trading_session_ranges, ticker),
+        "news": provider_executor.submit(fetch_news, ticker, 5),
+    }
+    done, pending = concurrent.futures.wait(provider_futures.values(), timeout=MARKET_DATA_TIMEOUT_SECONDS)
+    values: Dict[str, Any] = {}
+    for name, future in provider_futures.items():
+        if future in done:
+            try:
+                values[name] = future.result()
+            except Exception as exc:
+                values[name] = {"error": str(exc)} if name != "news" else []
+        else:
+            future.cancel()
+            values[name] = {"error": "provider_timeout"} if name != "news" else []
+    provider_executor.shutdown(wait=False, cancel_futures=True)
+    options = values["options"]
+    session_ranges = values["sessions"]
+    news = values["news"]
+    enrichment_errors = {
+        "options": options.get("error") if isinstance(options, dict) else None,
+        "sessions": session_ranges.get("error") if isinstance(session_ranges, dict) else None,
+        "news": "unavailable" if not news else None,
+    }
     options_plan = _build_options_plan(options, trade_plan)
     _emit(progress_callback, ticker, "market_data", "completed")
     _emit(progress_callback, ticker, "strategy", "started")
@@ -153,6 +184,7 @@ def analyze_selected_stock(
         "session_ranges": session_ranges,
         "validation": {"available": False, "reason": "not_run"},
         "news": news,
+        "enrichment_errors": {key: value for key, value in enrichment_errors.items() if value},
         "quant_score": stock.get("total_score"),
         "risk_adjusted_score": stock.get("risk_adjusted_score"),
     }

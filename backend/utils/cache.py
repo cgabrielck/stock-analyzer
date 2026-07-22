@@ -1,6 +1,7 @@
 import json
 import os
 import threading
+import tempfile
 import time
 from typing import Any, Dict, Optional
 
@@ -16,6 +17,18 @@ class Cache:
 
     def _path(self, category: str) -> str:
         return os.path.join(self._dir, f"{category}.json")
+
+    def _write_store(self, path: str, store: Dict[str, Any]) -> None:
+        fd, temp_path = tempfile.mkstemp(prefix="cache_", suffix=".json", dir=self._dir)
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(store, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, path)
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
 
     def get(self, key: str, category: str, ttl: Optional[int] = None) -> Optional[Any]:
         with self._lock:
@@ -39,7 +52,7 @@ class Cache:
             if key not in store:
                 return None
             entry = store[key]
-            effective_ttl = ttl or CACHE_TTL.get(category, 86400)
+            effective_ttl = ttl or entry.get("ttl") or CACHE_TTL.get(category, 86400)
             if now - entry["ts"] < effective_ttl:
                 self._mem_cache[mem_key] = {"value": entry["value"], "ts": entry["ts"], "ttl": effective_ttl}
                 return entry["value"]
@@ -60,9 +73,8 @@ class Cache:
                         store = json.load(f)
                 except (json.JSONDecodeError, OSError):
                     store = {}
-            store[key] = {"value": value, "ts": now}
-            with open(path, "w") as f:
-                json.dump(store, f, indent=2)
+            store[key] = {"value": value, "ts": now, "ttl": effective_ttl}
+            self._write_store(path, store)
 
     def delete(self, key: str, category: str) -> None:
         with self._lock:
@@ -76,8 +88,7 @@ class Cache:
                 except (json.JSONDecodeError, OSError):
                     return
                 store.pop(key, None)
-                with open(path, "w") as f:
-                    json.dump(store, f, indent=2)
+                self._write_store(path, store)
 
     def clear(self, category: Optional[str] = None) -> None:
         """Clear memory and disk entries, including those held by a Cloud worker."""
@@ -115,11 +126,12 @@ class Cache:
                 except (json.JSONDecodeError, OSError):
                     continue
                 ttl = CACHE_TTL.get(category, 86400)
-                store = {k: v for k, v in store.items() if now - v["ts"] < ttl}
-                with open(path, "w") as f:
-                    json.dump(store, f, indent=2)
-                self._mem_cache = {k: v for k, v in self._mem_cache.items()
-                                   if k.startswith(f"{category}:") and now - v["ts"] < ttl}
+                store = {k: v for k, v in store.items() if now - v["ts"] < v.get("ttl", ttl)}
+                self._write_store(path, store)
+            self._mem_cache = {
+                key: value for key, value in self._mem_cache.items()
+                if now - value["ts"] < value.get("ttl", 86400)
+            }
 
     def get_cache_status(self) -> Dict[str, Any]:
         with self._lock:

@@ -150,21 +150,17 @@ def _inject_apple_css() -> None:
     .stAlert { background:var(--panel-2); border:1px solid var(--line-hot); border-radius:7px; color:var(--text); font-size:.78rem; }
     .stock-tag { display:inline-flex; align-items:center; background:var(--panel-2); border:1px solid var(--line-hot); border-radius:4px; padding:3px 8px; color:var(--text); font-family:var(--mono); font-size:.68rem; font-weight:700; margin:2px; }
     .st-key-mobile_quick_start { display:none; }
-    .mobile-quick-copy { display:none; }
 
     @media (max-width: 1024px) { .main > div { padding:1rem; } .app-title{font-size:1.65rem;} }
     @media (max-width: 768px) {
-        .main > div { padding:.7rem .65rem 2rem; }
+        .main > div { padding:3.8rem .65rem 2rem; }
         .terminal-header { align-items:flex-start; flex-direction:column; gap:.65rem; }
         .app-title { font-size:1.45rem; }
         .app-subtitle { font-size:.7rem; }
         .terminal-live { font-size:.6rem; }
-        .st-key-mobile_quick_start { display:block; margin:.1rem 0 1rem; padding:.85rem !important; border-color:rgba(34,211,197,.38) !important; background:linear-gradient(145deg,rgba(34,211,197,.10),var(--panel)) !important; box-shadow:0 10px 28px rgba(0,0,0,.2); }
-        .mobile-quick-copy { display:block; }
-        .mobile-quick-title { color:var(--text); font-size:1rem; font-weight:750; margin:0 0 .2rem; }
-        .mobile-quick-text { color:var(--muted); font-size:.72rem; line-height:1.45; margin:0 0 .5rem; }
-        .mobile-quick-meta { color:var(--cyan); font:650 .64rem var(--mono); letter-spacing:.03em; margin:0 0 .65rem; }
-        .st-key-mobile_quick_start .stButton > button { width:100%; min-height:52px; font-size:.9rem; letter-spacing:.02em; box-shadow:0 0 24px rgba(34,211,197,.2); }
+        .st-key-mobile_quick_start { display:block; margin:0 0 1rem; padding:0 !important; border:0 !important; background:transparent !important; box-shadow:none !important; }
+        .st-key-mobile_quick_start .stButton { margin:0; }
+        .st-key-mobile_quick_start .stButton > button { width:100%; min-height:56px; font-size:1rem; letter-spacing:.02em; box-shadow:0 0 24px rgba(34,211,197,.22); }
         .rec-card { min-height:0; padding:.8rem; }
         .stTabs [data-baseweb="tab-list"] { position:sticky; top:0; z-index:20; background:rgba(7,11,18,.94); backdrop-filter:blur(12px); padding:.45rem 0; }
         .stTabs [data-baseweb="tab"] { font-size:.67rem; padding:.48rem .62rem; min-height:42px; }
@@ -172,7 +168,10 @@ def _inject_apple_css() -> None:
         div[data-testid="stMetric"] { min-height:72px; padding:.6rem .68rem; }
         div[data-testid="stMetric"] [data-testid="stMetricValue"] { font-size:1rem; }
         .stDataFrame { max-height:70vh; }
-        [data-testid="stSidebarCollapsedControl"] button { border:1px solid var(--cyan) !important; background:var(--panel-2) !important; color:var(--cyan) !important; }
+        [data-testid="stSidebarCollapsedControl"] { position:fixed !important; top:.65rem !important; left:.65rem !important; z-index:999999 !important; width:auto !important; }
+        [data-testid="stSidebarCollapsedControl"] button { width:132px !important; height:46px !important; padding:0 14px !important; border:2px solid var(--cyan) !important; border-radius:8px !important; background:linear-gradient(135deg,#123b3b,#0d2027) !important; color:var(--cyan) !important; box-shadow:0 0 24px rgba(34,211,197,.3) !important; }
+        [data-testid="stSidebarCollapsedControl"] button::after { content:"⚙  SETTINGS"; color:var(--cyan); font:750 .72rem var(--mono); letter-spacing:.06em; white-space:nowrap; }
+        [data-testid="stSidebarCollapsedControl"] button svg { width:18px !important; height:18px !important; margin-right:6px; }
         section[data-testid="stSidebar"] { min-width:0; }
     }
 </style>"""
@@ -2001,16 +2000,6 @@ try {
     mobile_run_clicked = False
     if not st.session_state.analysis_done:
         with st.container(key="mobile_quick_start"):
-            st.markdown(
-                f"""
-                <div class="mobile-quick-copy">
-                    <p class="mobile-quick-title">{html.escape(t('mobile.quick_title', lang))}</p>
-                    <p class="mobile-quick-text">{html.escape(t('mobile.quick_desc', lang))}</p>
-                    <p class="mobile-quick-meta">{html.escape(t('mobile.quick_meta', lang, n=len(params.get('selected_tickers', []))))}</p>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
             mobile_run_clicked = st.button(
                 t("mobile.analyze_now", lang),
                 type="primary",

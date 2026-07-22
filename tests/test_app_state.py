@@ -12,6 +12,10 @@ import app as stock_app
 APP_PATH = str(Path(__file__).resolve().parents[1] / "backend" / "app.py")
 
 
+def test_app_exposes_monotonic_timer_for_progress() -> None:
+    assert stock_app.time.monotonic() > 0
+
+
 def test_primary_routes_render_without_exceptions() -> None:
     for route in ("home", "scan", "picks", "picks_news", "portfolio"):
         app = AppTest.from_file(APP_PATH, default_timeout=30)

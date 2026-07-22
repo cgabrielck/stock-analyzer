@@ -3,6 +3,7 @@ import shutil
 import os
 import io
 import html
+import time
 from typing import Any, Dict, List, Optional
 
 import streamlit as st
@@ -1764,27 +1765,27 @@ def render_home_tab(lang: str) -> None:
     left, right = st.columns(2)
     with left:
         st.markdown(
-            f"<div class='entry-card'><div class='entry-label'>01</div><div class='entry-title'>{t('landing.scan_title', lang)}</div>"
-            f"<div class='entry-copy'>{t('landing.scan_copy', lang, n=len(STOCK_UNIVERSE))}</div><div class='entry-meta'>{t('landing.scan_meta', lang, n=len(STOCK_UNIVERSE))}</div></div>",
-            unsafe_allow_html=True,
-        )
-        if st.button(t("landing.scan_action", lang), type="primary", width="stretch", key="landing_scan"):
-            st.session_state.app_route = "scan"
-            st.rerun()
-    with right:
-        st.markdown(
-            f"<div class='entry-card'><div class='entry-label'>02</div><div class='entry-title'>{t('landing.picks_title', lang)}</div>"
+            f"<div class='entry-card'><div class='entry-label'>01 · {t('landing.primary', lang)}</div><div class='entry-title'>{t('landing.picks_title', lang)}</div>"
             f"<div class='entry-copy'>{t('landing.picks_copy', lang)}</div><div class='entry-meta'>{t('landing.picks_meta', lang)}</div></div>",
             unsafe_allow_html=True,
         )
         if st.button(t("landing.picks_action", lang), type="primary", width="stretch", key="landing_picks"):
             st.session_state.app_route = "picks"
             st.rerun()
+    with right:
+        st.markdown(
+            f"<div class='entry-card'><div class='entry-label'>02</div><div class='entry-title'>{t('landing.scan_title', lang)}</div>"
+            f"<div class='entry-copy'>{t('landing.scan_copy', lang, n=len(STOCK_UNIVERSE))}</div><div class='entry-meta'>{t('landing.scan_meta', lang, n=len(STOCK_UNIVERSE))}</div></div>",
+            unsafe_allow_html=True,
+        )
+        if st.button(t("landing.scan_action", lang), type="secondary", width="stretch", key="landing_scan"):
+            st.session_state.app_route = "scan"
+            st.rerun()
     st.markdown(
         f"<div class='proof-strip'><div class='proof-item'><div class='proof-value'>{len(STOCK_UNIVERSE)}</div><div class='proof-label'>{t('landing.stocks', lang)}</div></div>"
         f"<div class='proof-item'><div class='proof-value'>14</div><div class='proof-label'>{t('landing.sectors', lang)}</div></div>"
         f"<div class='proof-item'><div class='proof-value'>5</div><div class='proof-label'>{t('landing.max_picks', lang)}</div></div>"
-        f"<div class='proof-item'><div class='proof-value'>102</div><div class='proof-label'>{t('landing.tests', lang)}</div></div></div>",
+        f"<div class='proof-item'><div class='proof-value'>103</div><div class='proof-label'>{t('landing.tests', lang)}</div></div></div>",
         unsafe_allow_html=True,
     )
 
@@ -2382,12 +2383,12 @@ def build_minimal_sidebar() -> Dict[str, Any]:
 
 
 def render_primary_navigation(lang: str) -> None:
-    home, scan, picks, picks_news, portfolio = st.columns(5)
+    home, picks, picks_news, scan, portfolio = st.columns(5)
     actions = [
         (home, "home", t("nav.home", lang)),
-        (scan, "scan", t("nav.scan", lang)),
         (picks, "picks", t("nav.picks", lang)),
         (picks_news, "picks_news", t("nav.picks_news", lang)),
+        (scan, "scan", t("nav.scan", lang)),
         (portfolio, "portfolio", t("portfolio.title", lang)),
     ]
     for column, route, label in actions:

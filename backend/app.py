@@ -149,6 +149,20 @@ def _inject_apple_css() -> None:
     .stSlider [role="slider"] { background:var(--cyan) !important; border:2px solid var(--panel) !important; }
     .stAlert { background:var(--panel-2); border:1px solid var(--line-hot); border-radius:7px; color:var(--text); font-size:.78rem; }
     .stock-tag { display:inline-flex; align-items:center; background:var(--panel-2); border:1px solid var(--line-hot); border-radius:4px; padding:3px 8px; color:var(--text); font-family:var(--mono); font-size:.68rem; font-weight:700; margin:2px; }
+    .landing-hero { padding:2.2rem 0 1.2rem; max-width:900px; }
+    .landing-eyebrow { color:var(--cyan); font:700 .68rem var(--mono); letter-spacing:.16em; text-transform:uppercase; }
+    .landing-title { color:var(--text); font-size:2.5rem; line-height:1.08; letter-spacing:-.045em; font-weight:780; margin:.45rem 0 .7rem; }
+    .landing-copy { color:var(--muted); font-size:.95rem; line-height:1.6; max-width:680px; }
+    .entry-card { min-height:235px; padding:1.25rem; border:1px solid var(--line-hot); border-radius:12px; background:linear-gradient(145deg,rgba(34,211,197,.08),var(--panel)); }
+    .entry-label { color:var(--cyan); font:700 .64rem var(--mono); letter-spacing:.12em; text-transform:uppercase; }
+    .entry-title { color:var(--text); font-size:1.35rem; font-weight:750; margin:.5rem 0; }
+    .entry-copy { color:var(--muted); font-size:.78rem; line-height:1.55; min-height:76px; }
+    .entry-meta { color:var(--faint); font:.66rem var(--mono); margin-top:.9rem; }
+    .proof-strip { display:grid; grid-template-columns:repeat(4,1fr); gap:.65rem; margin:1.2rem 0; }
+    .proof-item { padding:.9rem; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
+    .proof-value { color:var(--text); font:750 1.2rem var(--mono); }
+    .proof-label { color:var(--muted); font:.62rem var(--mono); text-transform:uppercase; letter-spacing:.07em; }
+    .primary-nav { display:flex; gap:.5rem; margin-bottom:1rem; }
     .st-key-primary_analysis_action { display:block; max-width:420px; margin:.2rem 0 1rem; padding:0 !important; border:0 !important; background:transparent !important; }
     .st-key-primary_analysis_action .stButton > button { min-height:48px; width:100%; font-size:.88rem; }
 
@@ -163,6 +177,12 @@ def _inject_apple_css() -> None:
         .st-key-primary_analysis_action .stButton { margin:0; }
         .st-key-primary_analysis_action .stButton > button { width:100%; min-height:56px; font-size:1rem; letter-spacing:.02em; box-shadow:0 0 24px rgba(34,211,197,.22); }
         .rec-card { min-height:0; padding:.8rem; }
+        .landing-hero { padding:.6rem 0; }
+        .landing-title { font-size:1.8rem; }
+        .landing-copy { font-size:.8rem; }
+        .entry-card { min-height:0; }
+        .entry-copy { min-height:0; }
+        .proof-strip { grid-template-columns:repeat(2,1fr); }
         .stTabs [data-baseweb="tab-list"] { position:sticky; top:0; z-index:20; background:rgba(7,11,18,.94); backdrop-filter:blur(12px); padding:.45rem 0; }
         .stTabs [data-baseweb="tab"] { font-size:.67rem; padding:.48rem .62rem; min-height:42px; }
         .stButton > button { min-height:44px; }
@@ -181,21 +201,27 @@ def _inject_apple_css() -> None:
 
 
 def init_state() -> None:
-    if "recommendations" not in st.session_state:
-        st.session_state.recommendations: List[Dict[str, Any]] = []
-        st.session_state.all_rankings: List[Dict[str, Any]] = []
-        st.session_state.scored_data: List[Dict[str, Any]] = []
-        st.session_state.source_health: Dict[str, Any] = {}
-        st.session_state.upgrade_logs: List[Dict[str, Any]] = []
-        st.session_state.analysis_running = False
-        st.session_state.analysis_done = False
-        st.session_state.custom_tickers: List[str] = _load_custom_tickers()
-        st.session_state.lang: str = "zh_tw"
-        st.session_state.portfolio: Dict[str, Any] = {}
-        st.session_state.market_regime: Dict[str, Any] = {}
-        st.session_state.deep_research: Dict[str, Dict[str, Any]] = {}
-        st.session_state.deep_selection: List[str] = []
-        st.session_state.deep_selection_widget: List[str] = []
+    defaults: Dict[str, Any] = {
+        "app_route": "home",
+        "recommendations": [],
+        "all_rankings": [],
+        "scored_data": [],
+        "source_health": {},
+        "upgrade_logs": [],
+        "analysis_running": False,
+        "analysis_done": False,
+        "custom_tickers": _load_custom_tickers(),
+        "lang": "zh_tw",
+        "portfolio": {},
+        "market_regime": {},
+        "picks_status": "idle",
+        "picks_results": {},
+        "picks_errors": {},
+        "picks_selection_widget": [],
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
 
 
 def build_sidebar() -> Dict[str, Any]:
@@ -717,54 +743,6 @@ def _build_trade_plan_text(data: Dict[str, Any], lang: str) -> str:
 def render_recommendations_tab() -> None:
     lang = st.session_state.get("lang", "zh_tw")
     recs = st.session_state.recommendations
-    scored = st.session_state.get("scored_data", [])
-
-    st.subheader(t("deep.pool_title", lang))
-    st.caption(t("deep.pool_desc", lang))
-    top_tickers = [stock["ticker"] for stock in recs[:3]]
-    action1, action2 = st.columns(2)
-    with action1:
-        if st.button(t("deep.select_top", lang), width="stretch", key="deep_select_top"):
-            st.session_state.deep_selection_widget = top_tickers
-            st.rerun()
-    with action2:
-        if st.button(t("deep.clear", lang), width="stretch", key="deep_clear"):
-            st.session_state.deep_selection_widget = []
-            st.rerun()
-
-    stock_by_ticker = {stock["ticker"]: stock for stock in scored}
-    options = list(stock_by_ticker)
-    selected = st.multiselect(
-        t("deep.selector", lang),
-        options,
-        max_selections=5,
-        format_func=lambda ticker: f"{ticker} — {_stock_name(stock_by_ticker[ticker], lang)}",
-        key="deep_selection_widget",
-    )
-    if st.button(
-        t("deep.run", lang),
-        type="primary",
-        width="stretch",
-        disabled=not selected,
-        key="deep_run",
-    ):
-        from agents.deep_research import analyze_selected_stock
-        results = {}
-        progress = st.progress(0, text=t("deep.running", lang))
-        for index, ticker in enumerate(selected):
-            results[ticker] = analyze_selected_stock(stock_by_ticker[ticker], lang)
-            progress.progress((index + 1) / len(selected), text=f"{ticker} ({index + 1}/{len(selected)})")
-        progress.empty()
-        st.session_state.deep_research = results
-
-    deep_results = st.session_state.get("deep_research", {})
-    if deep_results:
-        st.markdown("---")
-        st.subheader(t("deep.results", lang))
-        for ticker, result in deep_results.items():
-            _render_deep_research_result(ticker, result, lang)
-
-    st.markdown("---")
     st.subheader(t("deep.system_picks", lang))
     if not recs:
         st.warning(t("recommend.nodata", lang))
@@ -1668,15 +1646,75 @@ def render_stock_pool_tab() -> None:
 
 
 def render_home_tab(lang: str) -> None:
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.markdown(f"<div class='feature-card'><h3>01 · {t('app.feature1', lang)}</h3><p>{t('app.feature1.desc', lang)}</p></div>", unsafe_allow_html=True)
-    with col2:
-        st.markdown(f"<div class='feature-card'><h3>02 · {t('app.feature2', lang)}</h3><p>{t('app.feature2.desc', lang)}</p></div>", unsafe_allow_html=True)
-    with col3:
-        st.markdown(f"<div class='feature-card'><h3>03 · {t('app.feature3', lang)}</h3><p>{t('app.feature3.desc', lang)}</p></div>", unsafe_allow_html=True)
-    with col4:
-        st.markdown(f"<div class='feature-card'><h3>04 · {t('app.feature4', lang)}</h3><p>{t('app.feature4.desc', lang)}</p></div>", unsafe_allow_html=True)
+    st.markdown(
+        f"<div class='landing-hero'><div class='landing-eyebrow'>{t('landing.eyebrow', lang)}</div>"
+        f"<div class='landing-title'>{t('landing.title', lang)}</div>"
+        f"<div class='landing-copy'>{t('landing.copy', lang)}</div></div>",
+        unsafe_allow_html=True,
+    )
+    left, right = st.columns(2)
+    with left:
+        st.markdown(
+            f"<div class='entry-card'><div class='entry-label'>01</div><div class='entry-title'>{t('landing.scan_title', lang)}</div>"
+            f"<div class='entry-copy'>{t('landing.scan_copy', lang)}</div><div class='entry-meta'>{t('landing.scan_meta', lang)}</div></div>",
+            unsafe_allow_html=True,
+        )
+        if st.button(t("landing.scan_action", lang), type="primary", width="stretch", key="landing_scan"):
+            st.session_state.app_route = "scan"
+            st.rerun()
+    with right:
+        st.markdown(
+            f"<div class='entry-card'><div class='entry-label'>02</div><div class='entry-title'>{t('landing.picks_title', lang)}</div>"
+            f"<div class='entry-copy'>{t('landing.picks_copy', lang)}</div><div class='entry-meta'>{t('landing.picks_meta', lang)}</div></div>",
+            unsafe_allow_html=True,
+        )
+        if st.button(t("landing.picks_action", lang), type="primary", width="stretch", key="landing_picks"):
+            st.session_state.app_route = "picks"
+            st.rerun()
+    st.markdown(
+        f"<div class='proof-strip'><div class='proof-item'><div class='proof-value'>{len(STOCK_UNIVERSE)}</div><div class='proof-label'>{t('landing.stocks', lang)}</div></div>"
+        f"<div class='proof-item'><div class='proof-value'>14</div><div class='proof-label'>{t('landing.sectors', lang)}</div></div>"
+        f"<div class='proof-item'><div class='proof-value'>5</div><div class='proof-label'>{t('landing.max_picks', lang)}</div></div>"
+        f"<div class='proof-item'><div class='proof-value'>72</div><div class='proof-label'>{t('landing.tests', lang)}</div></div></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def render_our_picks_page(lang: str, force_refresh: bool = False) -> None:
+    st.subheader(t("deep.pool_title", lang))
+    st.caption(t("deep.pool_desc_independent", lang))
+    stock_by_ticker = {stock["ticker"]: stock for stock in STOCK_UNIVERSE}
+    selected = st.multiselect(
+        t("deep.selector", lang),
+        list(stock_by_ticker),
+        max_selections=5,
+        format_func=lambda ticker: f"{ticker} — {_stock_name(stock_by_ticker[ticker], lang)} · {_sector_name(stock_by_ticker[ticker]['sector'], lang)}",
+        key="picks_selection_widget",
+    )
+    if st.button(t("deep.clear", lang), width="stretch", key="picks_clear"):
+        st.session_state.picks_selection_widget = []
+        st.rerun()
+    if st.button(t("deep.run", lang), type="primary", width="stretch", disabled=not selected, key="picks_run"):
+        from agents.deep_research import analyze_tickers
+
+        st.session_state.picks_status = "running"
+        progress = st.progress(0, text=t("deep.running", lang))
+
+        def update(ticker: str, completed: int, total: int) -> None:
+            progress.progress(completed / total if total else 0, text=f"{ticker} ({completed + 1}/{total})")
+
+        results = analyze_tickers(selected, lang=lang, force_refresh=force_refresh, progress_callback=update)
+        progress.progress(1.0, text=t("deep.complete", lang))
+        progress.empty()
+        st.session_state.picks_results = results
+        st.session_state.picks_errors = {ticker: result["error"] for ticker, result in results.items() if result.get("error")}
+        st.session_state.picks_status = "success" if not st.session_state.picks_errors else "partial"
+    results = st.session_state.get("picks_results", {})
+    if results:
+        st.markdown("---")
+        st.subheader(t("deep.results", lang))
+        for ticker, result in results.items():
+            _render_deep_research_result(ticker, result, lang)
 
 
 
@@ -2064,6 +2102,86 @@ def render_portfolio_tab() -> None:
         st.rerun()
 
 
+def build_minimal_sidebar() -> Dict[str, Any]:
+    lang = st.session_state.get("lang", "zh_tw")
+    st.sidebar.markdown(f'<div class="sidebar-section">{t("sidebar.control", lang)}</div>', unsafe_allow_html=True)
+    language_options = {"zh_cn": "简体中文", "zh_tw": "繁體中文", "en": "English"}
+    selected_lang = st.sidebar.selectbox(
+        "Language",
+        options=list(language_options),
+        format_func=lambda key: language_options[key],
+        index=list(language_options).index(lang),
+        key="minimal_lang_selector",
+    )
+    if selected_lang != lang:
+        st.session_state.lang = selected_lang
+        st.rerun()
+    force_refresh = st.sidebar.checkbox(t("sidebar.refresh", selected_lang), value=False, key="picks_force_refresh")
+    return {"lang": selected_lang, "force_refresh": force_refresh}
+
+
+def render_primary_navigation(lang: str) -> None:
+    home, scan, picks = st.columns(3)
+    actions = [
+        (home, "home", t("nav.home", lang)),
+        (scan, "scan", t("nav.scan", lang)),
+        (picks, "picks", t("nav.picks", lang)),
+    ]
+    for column, route, label in actions:
+        with column:
+            if st.button(
+                label,
+                type="primary" if st.session_state.app_route == route else "secondary",
+                width="stretch",
+                key=f"route_{route}",
+            ):
+                st.session_state.app_route = route
+                st.rerun()
+
+
+def render_scan_page(params: Dict[str, Any], lang: str) -> None:
+    params = dict(params)
+    params["selected_tickers"] = [stock["ticker"] for stock in STOCK_UNIVERSE]
+    with st.container(key="primary_analysis_action"):
+        run_clicked = st.button(
+            t("sidebar.start", lang),
+            type="primary",
+            width="stretch",
+            key="primary_run_analysis",
+            disabled=st.session_state.analysis_running,
+        )
+    if run_clicked:
+        run_analysis(params)
+    if not st.session_state.analysis_done:
+        st.caption(t("scan.ready", lang, n=len(STOCK_UNIVERSE)))
+        return
+    tabs = st.tabs([
+        t("tab.recommend", lang), t("tab.ranking", lang), t("tab.charts", lang),
+        t("tab.pool", lang), t("tab.backtest", lang), t("tab.compare", lang),
+        t("tab.valuation", lang), t("tab.news", lang), t("industry_news.title", lang), t("tab.ai", lang),
+    ])
+    with tabs[0]:
+        render_recommendations_tab()
+    with tabs[1]:
+        render_rankings_tab()
+    with tabs[2]:
+        render_charts_tab()
+    with tabs[3]:
+        render_stock_pool_tab()
+    with tabs[4]:
+        render_backtest_tab(params["selected_tickers"])
+    with tabs[5]:
+        render_compare_tab()
+    with tabs[6]:
+        render_valuation_tab()
+    with tabs[7]:
+        render_news_tab()
+    with tabs[8]:
+        render_industry_news_tab()
+    with tabs[9]:
+        render_ai_status_tab()
+
+
 def main() -> None:
     st.set_page_config(page_title="Stock Analyzer", page_icon="", layout="wide")
     init_state()
@@ -2095,68 +2213,20 @@ try {
         unsafe_allow_html=True,
     )
 
-    params = build_sidebar()
-
-    with st.container(key="primary_analysis_action"):
-        run_clicked = st.button(
-            t("sidebar.start", lang),
-            type="primary",
-            width="stretch",
-            key="primary_run_analysis",
-        )
-
-    show_source_health()
-    st.sidebar.markdown("<hr style='margin:1.2rem 0;'>", unsafe_allow_html=True)
-    export_csv()
-
-    if run_clicked:
-        if not params.get("selected_tickers"):
-            st.error(t("sidebar.select_stock", lang))
-        else:
-            run_analysis(params)
-
-    show_tabs = st.session_state.analysis_done and st.session_state.recommendations
-    if show_tabs:
-        tab_labels = [
-            t("tab.recommend", lang), t("tab.portfolio", lang), t("tab.ranking", lang),
-            t("tab.charts", lang), t("tab.pool", lang), t("tab.backtest", lang),
-            t("tab.compare", lang), t("tab.valuation", lang), t("tab.news", lang),
-            t("industry_news.title", lang), t("tab.ai", lang),
-        ]
+    render_primary_navigation(lang)
+    route = st.session_state.app_route
+    if route == "scan":
+        params = build_sidebar()
+        show_source_health()
+        st.sidebar.markdown("<hr style='margin:1.2rem 0;'>", unsafe_allow_html=True)
+        export_csv()
+        render_scan_page(params, lang)
+    elif route == "picks":
+        params = build_minimal_sidebar()
+        render_our_picks_page(lang, force_refresh=params["force_refresh"])
     else:
-        tab_labels = [t("mobile.home", lang), t("tab.pool", lang), t("tab.backtest", lang)]
-
-    tabs = st.tabs(tab_labels)
-    if show_tabs:
-        with tabs[0]:
-            render_recommendations_tab()
-        with tabs[1]:
-            render_portfolio_tab()
-        with tabs[2]:
-            render_rankings_tab()
-        with tabs[3]:
-            render_charts_tab()
-        with tabs[4]:
-            render_stock_pool_tab()
-        with tabs[5]:
-            render_backtest_tab(params.get("selected_tickers"))
-        with tabs[6]:
-            render_compare_tab()
-        with tabs[7]:
-            render_valuation_tab()
-        with tabs[8]:
-            render_news_tab()
-        with tabs[9]:
-            render_industry_news_tab()
-        with tabs[10]:
-            render_ai_status_tab()
-    else:
-        with tabs[0]:
-            render_home_tab(lang)
-        with tabs[1]:
-            render_stock_pool_tab()
-        with tabs[2]:
-            render_backtest_tab(params.get("selected_tickers"))
+        build_minimal_sidebar()
+        render_home_tab(lang)
 
 
 if __name__ == "__main__":

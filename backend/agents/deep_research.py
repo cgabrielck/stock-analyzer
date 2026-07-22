@@ -1,13 +1,65 @@
-from typing import Any, Dict
+from typing import Any, Callable, Dict, List, Optional
 
-from agents.data_fetcher import fetch_news
+from agents.data_fetcher import fetch_news, fetch_stock_data
+from agents.fundamental_analyzer import calculate_growth_score
 from agents.llm_agent import suggest_trading_strategy
+from agents.risk_analyzer import calculate_risk_adjusted_score
 from agents.technical_analyzer import compute_technical_indicators
+from utils.constants import STOCK_UNIVERSE
 
 
-def analyze_selected_stock(stock: Dict[str, Any], lang: str = "zh_tw") -> Dict[str, Any]:
+def analyze_ticker(ticker: str, lang: str = "zh_tw", force_refresh: bool = False) -> Dict[str, Any]:
+    stock = fetch_stock_data(ticker, force_refresh=force_refresh)
+    if stock.get("error"):
+        return {"ticker": ticker, "error": stock["error"], "stage": "fundamental"}
+
+    metadata = next((item for item in STOCK_UNIVERSE if item["ticker"] == ticker), {})
+    for key in ("name_cn", "name_tw", "name_en", "sector", "universe_tier"):
+        if metadata.get(key) is not None:
+            stock[key] = metadata[key]
+
+    growth_score, details, metrics_used = calculate_growth_score(stock)
+    stock.update({
+        "growth_score": growth_score,
+        "total_score": growth_score,
+        "score_details": details,
+        "metrics_used": metrics_used,
+    })
+    technical = compute_technical_indicators(ticker, period="1y", force_refresh=force_refresh)
+    if technical.get("error"):
+        return {"ticker": ticker, "error": technical["error"], "stage": "technical"}
+
+    technical_score = technical.get("technical_score")
+    if technical_score is not None:
+        stock["technical_score"] = technical_score
+        stock["total_score"] = round(growth_score * 0.7 + technical_score * 0.3, 1)
+    stock["risk_metrics"] = technical.get("risk_metrics", {"available": False})
+    stock.update(calculate_risk_adjusted_score(stock["total_score"], stock["risk_metrics"]))
+    return analyze_selected_stock(stock, lang=lang, technical=technical)
+
+
+def analyze_tickers(
+    tickers: List[str],
+    lang: str = "zh_tw",
+    force_refresh: bool = False,
+    progress_callback: Optional[Callable[[str, int, int], None]] = None,
+) -> Dict[str, Dict[str, Any]]:
+    results: Dict[str, Dict[str, Any]] = {}
+    for index, ticker in enumerate(tickers):
+        if progress_callback:
+            progress_callback(ticker, index, len(tickers))
+        try:
+            results[ticker] = analyze_ticker(ticker, lang=lang, force_refresh=force_refresh)
+        except Exception as exc:
+            results[ticker] = {"ticker": ticker, "error": str(exc), "stage": "unexpected"}
+    return results
+
+
+def analyze_selected_stock(
+    stock: Dict[str, Any], lang: str = "zh_tw", technical: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     ticker = stock["ticker"]
-    technical = compute_technical_indicators(ticker, period="1y", force_refresh=False)
+    technical = technical or compute_technical_indicators(ticker, period="1y", force_refresh=False)
     if technical.get("error"):
         return {"ticker": ticker, "error": technical["error"]}
 

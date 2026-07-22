@@ -149,6 +149,8 @@ def _inject_apple_css() -> None:
     .stSlider [role="slider"] { background:var(--cyan) !important; border:2px solid var(--panel) !important; }
     .stAlert { background:var(--panel-2); border:1px solid var(--line-hot); border-radius:7px; color:var(--text); font-size:.78rem; }
     .stock-tag { display:inline-flex; align-items:center; background:var(--panel-2); border:1px solid var(--line-hot); border-radius:4px; padding:3px 8px; color:var(--text); font-family:var(--mono); font-size:.68rem; font-weight:700; margin:2px; }
+    .st-key-mobile_quick_start { display:none; }
+    .mobile-quick-copy { display:none; }
 
     @media (max-width: 1024px) { .main > div { padding:1rem; } .app-title{font-size:1.65rem;} }
     @media (max-width: 768px) {
@@ -156,9 +158,21 @@ def _inject_apple_css() -> None:
         .terminal-header { align-items:flex-start; flex-direction:column; gap:.65rem; }
         .app-title { font-size:1.45rem; }
         .app-subtitle { font-size:.7rem; }
+        .terminal-live { font-size:.6rem; }
+        .st-key-mobile_quick_start { display:block; margin:.1rem 0 1rem; padding:.85rem !important; border-color:rgba(34,211,197,.38) !important; background:linear-gradient(145deg,rgba(34,211,197,.10),var(--panel)) !important; box-shadow:0 10px 28px rgba(0,0,0,.2); }
+        .mobile-quick-copy { display:block; }
+        .mobile-quick-title { color:var(--text); font-size:1rem; font-weight:750; margin:0 0 .2rem; }
+        .mobile-quick-text { color:var(--muted); font-size:.72rem; line-height:1.45; margin:0 0 .5rem; }
+        .mobile-quick-meta { color:var(--cyan); font:650 .64rem var(--mono); letter-spacing:.03em; margin:0 0 .65rem; }
+        .st-key-mobile_quick_start .stButton > button { width:100%; min-height:52px; font-size:.9rem; letter-spacing:.02em; box-shadow:0 0 24px rgba(34,211,197,.2); }
         .rec-card { min-height:0; padding:.8rem; }
-        .stTabs [data-baseweb="tab"] { font-size:.64rem; padding:.4rem .55rem; }
+        .stTabs [data-baseweb="tab-list"] { position:sticky; top:0; z-index:20; background:rgba(7,11,18,.94); backdrop-filter:blur(12px); padding:.45rem 0; }
+        .stTabs [data-baseweb="tab"] { font-size:.67rem; padding:.48rem .62rem; min-height:42px; }
         .stButton > button { min-height:44px; }
+        div[data-testid="stMetric"] { min-height:72px; padding:.6rem .68rem; }
+        div[data-testid="stMetric"] [data-testid="stMetricValue"] { font-size:1rem; }
+        .stDataFrame { max-height:70vh; }
+        [data-testid="stSidebarCollapsedControl"] button { border:1px solid var(--cyan) !important; background:var(--panel-2) !important; color:var(--cyan) !important; }
         section[data-testid="stSidebar"] { min-width:0; }
     }
 </style>"""
@@ -1551,6 +1565,22 @@ def render_stock_pool_tab() -> None:
     st.dataframe(sec_counts, hide_index=True, width="stretch")
 
 
+def render_home_tab(lang: str) -> None:
+    st.markdown(f"### {t('mobile.home_title', lang)}")
+    st.caption(t("mobile.home_desc", lang))
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.markdown(f"<div class='feature-card'><h3>01 · {t('app.feature1', lang)}</h3><p>{t('app.feature1.desc', lang)}</p></div>", unsafe_allow_html=True)
+    with col2:
+        st.markdown(f"<div class='feature-card'><h3>02 · {t('app.feature2', lang)}</h3><p>{t('app.feature2.desc', lang)}</p></div>", unsafe_allow_html=True)
+    with col3:
+        st.markdown(f"<div class='feature-card'><h3>03 · {t('app.feature3', lang)}</h3><p>{t('app.feature3.desc', lang)}</p></div>", unsafe_allow_html=True)
+    with col4:
+        st.markdown(f"<div class='feature-card'><h3>04 · {t('app.feature4', lang)}</h3><p>{t('app.feature4.desc', lang)}</p></div>", unsafe_allow_html=True)
+
+    st.info(t("mobile.advanced_hint", lang))
+
+
 def export_csv() -> None:
     lang = st.session_state.get("lang", "zh_tw")
     if not st.session_state.all_rankings:
@@ -1968,63 +1998,78 @@ try {
 
     params = build_sidebar()
 
+    mobile_run_clicked = False
+    if not st.session_state.analysis_done:
+        with st.container(key="mobile_quick_start"):
+            st.markdown(
+                f"""
+                <div class="mobile-quick-copy">
+                    <p class="mobile-quick-title">{html.escape(t('mobile.quick_title', lang))}</p>
+                    <p class="mobile-quick-text">{html.escape(t('mobile.quick_desc', lang))}</p>
+                    <p class="mobile-quick-meta">{html.escape(t('mobile.quick_meta', lang, n=len(params.get('selected_tickers', []))))}</p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            mobile_run_clicked = st.button(
+                t("mobile.analyze_now", lang),
+                type="primary",
+                width="stretch",
+                key="mobile_run_analysis",
+            )
+
     show_source_health()
     st.sidebar.markdown("<hr style='margin:1.2rem 0;'>", unsafe_allow_html=True)
     export_csv()
 
-    if params.get("run_clicked"):
+    if params.get("run_clicked") or mobile_run_clicked:
         if not params.get("selected_tickers"):
             st.error(t("sidebar.select_stock", lang))
         else:
             run_analysis(params)
 
     show_tabs = st.session_state.analysis_done and st.session_state.recommendations
-    tab_labels = [t("tab.pool", lang), t("tab.backtest", lang)]
     if show_tabs:
-        tab_labels += [
-            t("tab.portfolio", lang), t("tab.recommend", lang), t("tab.ranking", lang),
-            t("tab.compare", lang), t("tab.valuation", lang), t("tab.charts", lang),
-            t("tab.news", lang), t("industry_news.title", lang), t("tab.ai", lang),
+        tab_labels = [
+            t("tab.recommend", lang), t("tab.portfolio", lang), t("tab.ranking", lang),
+            t("tab.charts", lang), t("tab.pool", lang), t("tab.backtest", lang),
+            t("tab.compare", lang), t("tab.valuation", lang), t("tab.news", lang),
+            t("industry_news.title", lang), t("tab.ai", lang),
         ]
     else:
-        tab_labels.append("🏠 " + t("app.title", lang))
+        tab_labels = [t("mobile.home", lang), t("tab.pool", lang), t("tab.backtest", lang)]
 
     tabs = st.tabs(tab_labels)
-    with tabs[0]:
-        render_stock_pool_tab()
-    with tabs[1]:
-        render_backtest_tab(params.get("selected_tickers"))
-
     if show_tabs:
-        with tabs[2]:
-            render_portfolio_tab()
-        with tabs[3]:
+        with tabs[0]:
             render_recommendations_tab()
-        with tabs[4]:
+        with tabs[1]:
+            render_portfolio_tab()
+        with tabs[2]:
             render_rankings_tab()
-        with tabs[5]:
-            render_compare_tab()
-        with tabs[6]:
-            render_valuation_tab()
-        with tabs[7]:
+        with tabs[3]:
             render_charts_tab()
+        with tabs[4]:
+            render_stock_pool_tab()
+        with tabs[5]:
+            render_backtest_tab(params.get("selected_tickers"))
+        with tabs[6]:
+            render_compare_tab()
+        with tabs[7]:
+            render_valuation_tab()
         with tabs[8]:
             render_news_tab()
         with tabs[9]:
             render_industry_news_tab()
         with tabs[10]:
             render_ai_status_tab()
-    elif not st.session_state.analysis_done:
-        st.markdown(f"<p style='color:#86868b;'>{t('app.start_hint', lang)}</p>", unsafe_allow_html=True)
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.markdown(f"<div class='feature-card'><h3>📊 {t('app.feature1', lang)}</h3><p>{t('app.feature1.desc', lang)}</p></div>", unsafe_allow_html=True)
-        with col2:
-            st.markdown(f"<div class='feature-card'><h3>📈 {t('app.feature2', lang)}</h3><p>{t('app.feature2.desc', lang)}</p></div>", unsafe_allow_html=True)
-        with col3:
-            st.markdown(f"<div class='feature-card'><h3>🔄 {t('app.feature3', lang)}</h3><p>{t('app.feature3.desc', lang)}</p></div>", unsafe_allow_html=True)
-        with col4:
-            st.markdown(f"<div class='feature-card'><h3>💎 {t('app.feature4', lang)}</h3><p>{t('app.feature4.desc', lang)}</p></div>", unsafe_allow_html=True)
+    else:
+        with tabs[0]:
+            render_home_tab(lang)
+        with tabs[1]:
+            render_stock_pool_tab()
+        with tabs[2]:
+            render_backtest_tab(params.get("selected_tickers"))
 
 
 if __name__ == "__main__":

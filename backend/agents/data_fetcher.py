@@ -1,4 +1,5 @@
 import concurrent.futures
+from datetime import date, datetime
 import json
 import os
 from typing import Any, Callable, Dict, Optional
@@ -8,7 +9,7 @@ import requests
 
 from utils.constants import STOCK_UNIVERSE, SEC_HEADERS, DATA_DIR
 from utils.cache import cache
-from utils.price_utils import get_latest_price, get_latest_quote
+from utils.price_utils import get_latest_price, get_latest_quote, get_session_ranges
 from agents.auto_upgrader import agent_state
 from agents.sec_analyzer import ticker_to_cik
 try:
@@ -620,20 +621,21 @@ def fetch_financials_history(ticker: str) -> dict[str, list[float]]:
     return result
 
 
-def fetch_options_chain(ticker: str) -> Dict[str, Any]:
+def fetch_options_chain(ticker: str, current_price: Optional[float] = None) -> Dict[str, Any]:
     try:
         stock = yf.Ticker(ticker)
         expirations = stock.options
         if not expirations:
             return {"error": "no_options"}
         nearest = expirations[0]
-        chain = stock.option_chain(nearest)
+        selected_expiry = _select_option_expiry(expirations)
+        chain = stock.option_chain(selected_expiry)
         calls = chain.calls
         puts = chain.puts
         if calls.empty and puts.empty:
             return {"error": "empty_chain"}
         atm_strike = None
-        spot = get_latest_price(stock)[0]
+        spot = current_price or get_latest_price(stock)[0]
         if spot:
             if not calls.empty:
                 idx = (calls["strike"] - spot).abs().idxmin()
@@ -645,6 +647,7 @@ def fetch_options_chain(ticker: str) -> Dict[str, Any]:
             "ticker": ticker,
             "expirations": list(expirations),
             "nearest_expiry": nearest,
+            "selected_expiry": selected_expiry,
             "num_calls": len(calls),
             "num_puts": len(puts),
             "atm_strike": atm_strike,
@@ -653,9 +656,69 @@ def fetch_options_chain(ticker: str) -> Dict[str, Any]:
             "max_call_volume": float(calls.loc[calls["volume"].idxmax(), "strike"]) if not calls.empty and calls["volume"].max() > 0 else None,
             "max_put_volume": float(puts.loc[puts["volume"].idxmax(), "strike"]) if not puts.empty and puts["volume"].max() > 0 else None,
             "put_call_ratio": len(puts) / len(calls) if len(calls) > 0 else None,
+            "calls": _option_contracts(calls, spot),
+            "puts": _option_contracts(puts, spot),
         }
     except Exception as e:
         return {"error": str(e)}
+
+
+def fetch_trading_session_ranges(ticker: str) -> Dict[str, Any]:
+    try:
+        return get_session_ranges(yf.Ticker(ticker))
+    except Exception as exc:
+        return {"error": str(exc), "sessions": {}}
+
+
+def _option_contracts(chain: Any, spot: Optional[float], limit: int = 12) -> list[Dict[str, Any]]:
+    if chain is None or chain.empty:
+        return []
+    contracts = chain.copy()
+    if spot:
+        contracts["_distance"] = (contracts["strike"] - spot).abs()
+        contracts = contracts.sort_values(["_distance", "openInterest", "volume"], ascending=[True, False, False])
+    rows = []
+    for _, contract in contracts.head(limit).iterrows():
+        bid = _finite_float(contract.get("bid"))
+        ask = _finite_float(contract.get("ask"))
+        last = _finite_float(contract.get("lastPrice"))
+        mid = round((bid + ask) / 2, 2) if bid is not None and ask is not None and ask >= bid else last
+        spread_pct = None
+        if bid is not None and ask is not None and mid and ask >= bid:
+            spread_pct = round((ask - bid) / mid * 100, 1)
+        rows.append({
+            "contract_symbol": contract.get("contractSymbol"),
+            "strike": _finite_float(contract.get("strike")),
+            "bid": bid,
+            "ask": ask,
+            "mid": mid,
+            "last": last,
+            "volume": int(contract.get("volume") or 0),
+            "open_interest": int(contract.get("openInterest") or 0),
+            "implied_volatility": _finite_float(contract.get("impliedVolatility")),
+            "in_the_money": bool(contract.get("inTheMoney", False)),
+            "spread_pct": spread_pct,
+        })
+    return rows
+
+
+def _select_option_expiry(expirations: Any, minimum_days: int = 21) -> str:
+    today = date.today()
+    for expiry in expirations:
+        try:
+            if (datetime.strptime(expiry, "%Y-%m-%d").date() - today).days >= minimum_days:
+                return expiry
+        except (TypeError, ValueError):
+            continue
+    return expirations[-1]
+
+
+def _finite_float(value: Any) -> Optional[float]:
+    try:
+        number = float(value)
+        return number if number == number and number not in (float("inf"), float("-inf")) else None
+    except (TypeError, ValueError):
+        return None
 
 
 def suggest_options_fallback(ticker: str, technical_data: Dict[str, Any], current_price: float) -> Dict[str, Any]:

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import math
 from typing import Any, Dict, Optional, Tuple
 
@@ -13,6 +13,14 @@ SESSION_LABELS = {
     "POST": "After-Hours Trading",
     "POSTPOST": "After-Hours Trading",
     "CLOSED": "Market Closed",
+}
+
+SESSION_ORDER = ("overnight", "pre_market", "regular", "after_hours")
+SESSION_NAMES = {
+    "overnight": "Overnight Trading",
+    "pre_market": "Pre-Market Trading",
+    "regular": "Regular Trading Hours",
+    "after_hours": "After-Hours Trading",
 }
 
 
@@ -85,6 +93,59 @@ def get_latest_price(
     return quote["price"], quote["session"]
 
 
+def get_session_ranges(stock: yf.Ticker) -> Dict[str, Any]:
+    """Return the latest observed OHLC range for each US trading session."""
+    result: Dict[str, Any] = {
+        "source": "yahoo_1m_extended_hours",
+        "timezone": "America/New_York",
+        "provider_note": "Overnight coverage depends on Yahoo availability.",
+        "sessions": {key: {"name": SESSION_NAMES[key], "available": False} for key in SESSION_ORDER},
+    }
+    try:
+        history = stock.history(period="5d", interval="1m", prepost=True, auto_adjust=False)
+        if history is None or history.empty:
+            return result
+        required = {"High", "Low", "Close"}
+        if not required.issubset(history.columns):
+            return result
+        frame = history.copy()
+        index = pd.DatetimeIndex(frame.index)
+        index = index.tz_localize("UTC") if index.tz is None else index
+        eastern = index.tz_convert("America/New_York")
+        frame["_timestamp"] = eastern
+        frame["_session"] = [_session_key(ts.hour * 60 + ts.minute) for ts in eastern]
+        frame["_session_date"] = [
+            (ts + timedelta(days=1)).date().isoformat() if key == "overnight" and ts.hour >= 20
+            else ts.date().isoformat()
+            for ts, key in zip(eastern, frame["_session"])
+        ]
+        for key in SESSION_ORDER:
+            subset = frame[frame["_session"] == key]
+            if subset.empty:
+                continue
+            latest_date = subset["_session_date"].max()
+            subset = subset[subset["_session_date"] == latest_date]
+            highs = pd.to_numeric(subset["High"], errors="coerce").dropna()
+            lows = pd.to_numeric(subset["Low"], errors="coerce").dropna()
+            closes = pd.to_numeric(subset["Close"], errors="coerce").dropna()
+            if highs.empty or lows.empty or closes.empty:
+                continue
+            result["sessions"][key] = {
+                "name": SESSION_NAMES[key],
+                "available": True,
+                "date": latest_date,
+                "high": round(float(highs.max()), 4),
+                "low": round(float(lows.min()), 4),
+                "last": round(float(closes.iloc[-1]), 4),
+                "start_time": subset["_timestamp"].iloc[0].isoformat(),
+                "end_time": subset["_timestamp"].iloc[-1].isoformat(),
+                "bars": int(len(subset)),
+            }
+    except Exception as exc:
+        result["error"] = str(exc)
+    return result
+
+
 def _candidate(info: Dict[str, Any], price_key: str, time_key: str, source: str) -> Optional[Dict[str, Any]]:
     price = info.get(price_key)
     if not _valid_price(price):
@@ -151,6 +212,16 @@ def _session_from_timestamp(value: Optional[datetime]) -> str:
     if minutes < 20 * 60:
         return "After-Hours Trading"
     return "Overnight Trading"
+
+
+def _session_key(minutes: int) -> str:
+    if minutes < 4 * 60 or minutes >= 20 * 60:
+        return "overnight"
+    if minutes < 9 * 60 + 30:
+        return "pre_market"
+    if minutes < 16 * 60:
+        return "regular"
+    return "after_hours"
 
 
 def _quote_result(candidate: Dict[str, Any], session: str, state: str, stale: bool) -> Dict[str, Any]:

@@ -1292,18 +1292,75 @@ def _render_deep_research_result(ticker: str, result: Dict[str, Any], lang: str)
     long = result.get("long_term", {})
     avoid = result.get("avoid", {})
     strategy = result.get("strategy", {})
+    trade = result.get("trade_plan", {})
+    option = result.get("options_plan", {})
+    technical = result.get("technical", {})
     with st.expander(f"{ticker} — {t('deep.research', lang)}", expanded=True):
         cols = st.columns(4)
         cols[0].metric(t("deep.short", lang), f"{short.get('score', 0):.1f}", short.get("view", "neutral").upper())
         cols[1].metric(t("deep.long", lang), f"{long.get('score', 0):.1f}", long.get("view", "neutral").upper())
-        cols[2].metric(t("risk.selection_score", lang), result.get("risk_adjusted_score", "N/A"))
-        cols[3].metric(t("deep.avoid", lang), t("deep.yes", lang) if avoid.get("active") else t("deep.no", lang))
-        technical = result.get("technical", {})
+        cols[2].metric(t("deep.stance", lang), str(trade.get("stance", "neutral")).upper())
+        cols[3].metric(t("deep.action", lang), str(trade.get("action", "watch")).replace("_", " ").upper())
+
+        quote_time = technical.get("price_quote_time") or t("deep.unavailable", lang)
+        stale = f" · {t('deep.stale', lang)}" if technical.get("price_stale") else ""
+        st.caption(
+            f"{t('deep.live_quote', lang)}: ${_number(technical.get('price'))} · "
+            f"{technical.get('price_session', t('deep.unavailable', lang))} · {quote_time}{stale}"
+        )
+
+        st.markdown("**" + t("deep.execution_plan", lang) + "**")
+        entry = trade.get("entry_zone", {})
+        targets = trade.get("targets", [])
+        plan_cols = st.columns(4)
+        plan_cols[0].metric(t("deep.entry_zone", lang), _price_range(entry.get("low"), entry.get("high")))
+        plan_cols[1].metric(t("deep.confirmation", lang), _currency(trade.get("confirmation_price")))
+        plan_cols[2].metric(t("deep.stop", lang), _currency(trade.get("stop_loss")))
+        plan_cols[3].metric(t("deep.targets", lang), " / ".join(_currency(value) for value in targets) or "N/A")
+        st.caption(f"{t('deep.execution_window', lang)}: {trade.get('execution_window', 'N/A')}")
+
+        st.markdown("**" + t("deep.session_ranges", lang) + "**")
+        sessions = result.get("session_ranges", {}).get("sessions", {})
+        session_rows = []
+        for key in ("overnight", "pre_market", "regular", "after_hours"):
+            session = sessions.get(key, {})
+            session_rows.append({
+                t("deep.session", lang): session.get("name", key.replace("_", " ").title()),
+                t("deep.date", lang): session.get("date", "N/A"),
+                t("deep.low", lang): _currency(session.get("low")),
+                t("deep.high", lang): _currency(session.get("high")),
+                t("deep.last", lang): _currency(session.get("last")),
+                t("deep.observed", lang): t("deep.yes", lang) if session.get("available") else t("deep.unavailable", lang),
+            })
+        st.dataframe(pd.DataFrame(session_rows), hide_index=True, width="stretch")
+        st.caption(t("deep.session_note", lang))
+
+        st.markdown("**" + t("deep.options_plan", lang) + "**")
+        if option.get("action") == "buy_to_open":
+            contract = option.get("contract", {})
+            option_cols = st.columns(4)
+            option_cols[0].metric(t("deep.contract", lang), f"{option.get('option_type', '').upper()} {contract.get('strike', 'N/A')}")
+            option_cols[1].metric(t("deep.expiry", lang), option.get("expiry", "N/A"))
+            option_cols[2].metric(t("deep.bid_ask", lang), f"{_currency(contract.get('bid'))} / {_currency(contract.get('ask'))}")
+            option_cols[3].metric(t("deep.max_entry", lang), _currency(option.get("max_entry_premium")))
+            option_rows = [{
+                t("deep.iv", lang): f"{float(contract.get('implied_volatility')) * 100:.1f}%" if contract.get("implied_volatility") is not None else "N/A",
+                t("deep.open_interest", lang): contract.get("open_interest", 0),
+                t("deep.volume", lang): contract.get("volume", 0),
+                t("deep.premium_stop", lang): _currency(option.get("stop_premium")),
+                t("deep.premium_targets", lang): " / ".join(_currency(value) for value in option.get("take_profit_premiums", [])),
+            }]
+            st.dataframe(pd.DataFrame(option_rows), hide_index=True, width="stretch")
+            st.caption(option.get("exit_rule", ""))
+        else:
+            st.info(f"{t('deep.no_options_trade', lang)}: {option.get('reason', 'N/A')}")
+
+        st.markdown("**" + t("deep.quant_evidence", lang) + "**")
         tech_cols = st.columns(4)
-        tech_cols[0].metric("EMA 9 / 21", _pair(technical.get("ema_9"), technical.get("ema_21")))
-        tech_cols[1].metric("EMA 50 / 200", _pair(technical.get("ema_50"), technical.get("ema_200")))
+        tech_cols[0].metric("RSI 14", _number(technical.get("rsi_14")))
+        tech_cols[1].metric("EMA 9 / 21", _pair(technical.get("ema_9"), technical.get("ema_21")))
         tech_cols[2].metric("ADX 14", _number(technical.get("adx_14")))
-        tech_cols[3].metric("MACD", _number(technical.get("macd_histogram"), 3))
+        tech_cols[3].metric("ATR 14", _number(technical.get("atr_14")))
         if avoid.get("reasons"):
             st.markdown("**" + t("deep.avoid_reasons", lang) + "**")
             for reason in avoid["reasons"]:
@@ -1311,13 +1368,13 @@ def _render_deep_research_result(ticker: str, result: Dict[str, Any], lang: str)
         if strategy.get("error"):
             st.warning(t("deep.llm_unavailable", lang))
         else:
-            st.markdown("**" + t("deep.trade_plan", lang) + "**")
+            st.markdown("**" + t("deep.reasoner_view", lang) + "**")
             st.write(strategy.get("reasoning", ""))
-            plan_cols = st.columns(3)
-            plan_cols[0].metric(t("deep.entry", lang), _number(strategy.get("entry", {}).get("price")))
-            targets = strategy.get("targets", [])
-            plan_cols[1].metric(t("deep.target", lang), _number(targets[0].get("price") if targets else None))
-            plan_cols[2].metric(t("deep.stop", lang), _number(strategy.get("stop_loss", {}).get("price")))
+            scenario = strategy.get("scenario", {})
+            if scenario:
+                st.write(f"{t('deep.base_case', lang)}: {scenario.get('base', 'N/A')}")
+
+        st.caption(t("deep.disclaimer", lang))
 
 
 def _number(value: Any, decimals: int = 2) -> str:
@@ -1326,6 +1383,14 @@ def _number(value: Any, decimals: int = 2) -> str:
 
 def _pair(first: Any, second: Any) -> str:
     return f"{_number(first)} / {_number(second)}"
+
+
+def _currency(value: Any) -> str:
+    return f"${value:.2f}" if isinstance(value, (int, float)) else "N/A"
+
+
+def _price_range(low: Any, high: Any) -> str:
+    return f"{_currency(low)} – {_currency(high)}" if low is not None and high is not None else "N/A"
 
 
 def render_rankings_tab() -> None:
@@ -1675,9 +1740,13 @@ def render_home_tab(lang: str) -> None:
         f"<div class='proof-strip'><div class='proof-item'><div class='proof-value'>{len(STOCK_UNIVERSE)}</div><div class='proof-label'>{t('landing.stocks', lang)}</div></div>"
         f"<div class='proof-item'><div class='proof-value'>14</div><div class='proof-label'>{t('landing.sectors', lang)}</div></div>"
         f"<div class='proof-item'><div class='proof-value'>5</div><div class='proof-label'>{t('landing.max_picks', lang)}</div></div>"
-        f"<div class='proof-item'><div class='proof-value'>72</div><div class='proof-label'>{t('landing.tests', lang)}</div></div></div>",
+        f"<div class='proof-item'><div class='proof-value'>78</div><div class='proof-label'>{t('landing.tests', lang)}</div></div></div>",
         unsafe_allow_html=True,
     )
+
+
+def _clear_picks_selection() -> None:
+    st.session_state["picks_selection_widget"] = []
 
 
 def render_our_picks_page(lang: str, force_refresh: bool = False) -> None:
@@ -1691,9 +1760,12 @@ def render_our_picks_page(lang: str, force_refresh: bool = False) -> None:
         format_func=lambda ticker: f"{ticker} — {_stock_name(stock_by_ticker[ticker], lang)} · {_sector_name(stock_by_ticker[ticker]['sector'], lang)}",
         key="picks_selection_widget",
     )
-    if st.button(t("deep.clear", lang), width="stretch", key="picks_clear"):
-        st.session_state.picks_selection_widget = []
-        st.rerun()
+    st.button(
+        t("deep.clear", lang),
+        width="stretch",
+        key="picks_clear",
+        on_click=_clear_picks_selection,
+    )
     if st.button(t("deep.run", lang), type="primary", width="stretch", disabled=not selected, key="picks_run"):
         from agents.deep_research import analyze_tickers
 

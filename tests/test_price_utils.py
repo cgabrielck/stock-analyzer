@@ -6,7 +6,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
-from utils.price_utils import _session_from_timestamp, get_latest_quote
+from utils.price_utils import _session_from_timestamp, get_latest_quote, get_session_ranges
 
 
 NOW = datetime(2026, 7, 21, 13, 15, tzinfo=timezone.utc)
@@ -105,3 +105,26 @@ def test_0900_new_york_is_pre_market() -> None:
     timestamp = pd.Timestamp("2026-07-21 09:00", tz="America/New_York").to_pydatetime()
 
     assert _session_from_timestamp(timestamp) == "Pre-Market Trading"
+
+
+def test_session_ranges_split_extended_and_regular_hours() -> None:
+    index = pd.DatetimeIndex([
+        pd.Timestamp("2026-07-21 02:00", tz="America/New_York"),
+        pd.Timestamp("2026-07-21 08:00", tz="America/New_York"),
+        pd.Timestamp("2026-07-21 10:00", tz="America/New_York"),
+        pd.Timestamp("2026-07-21 17:00", tz="America/New_York"),
+        pd.Timestamp("2026-07-21 21:00", tz="America/New_York"),
+    ])
+    history = pd.DataFrame({
+        "High": [91, 101, 111, 121, 131],
+        "Low": [89, 99, 109, 119, 129],
+        "Close": [90, 100, 110, 120, 130],
+    }, index=index)
+
+    ranges = get_session_ranges(FakeStock({}, history))["sessions"]
+
+    assert ranges["pre_market"]["high"] == 101
+    assert ranges["regular"]["low"] == 109
+    assert ranges["after_hours"]["last"] == 120
+    assert ranges["overnight"]["date"] == "2026-07-22"
+    assert ranges["overnight"]["high"] == 131

@@ -1,6 +1,11 @@
 from typing import Any, Callable, Dict, List, Optional
 
-from agents.data_fetcher import fetch_news, fetch_stock_data
+from agents.data_fetcher import (
+    fetch_news,
+    fetch_options_chain,
+    fetch_stock_data,
+    fetch_trading_session_ranges,
+)
 from agents.fundamental_analyzer import calculate_growth_score
 from agents.llm_agent import suggest_trading_strategy
 from agents.risk_analyzer import calculate_risk_adjusted_score
@@ -66,12 +71,18 @@ def analyze_selected_stock(
     short_score = _short_term_score(stock, technical)
     long_score = _long_term_score(stock, technical)
     avoid = _avoid_assessment(stock, technical, short_score, long_score)
+    trade_plan = _build_trade_plan(stock, technical, short_score, long_score, avoid)
+    current_price = technical.get("price") or stock.get("price") or 0
+    options = fetch_options_chain(ticker, current_price=current_price)
+    options_plan = _build_options_plan(options, trade_plan)
+    session_ranges = fetch_trading_session_ranges(ticker)
     news = fetch_news(ticker, max_items=5)
     strategy = suggest_trading_strategy(
         ticker,
         stock,
         technical,
-        technical.get("price") or stock.get("price") or 0,
+        current_price,
+        options_data=options,
         news_data=news,
         lang=lang,
     )
@@ -90,6 +101,10 @@ def analyze_selected_stock(
         "avoid": avoid,
         "technical": technical,
         "strategy": strategy,
+        "trade_plan": trade_plan,
+        "options": options,
+        "options_plan": options_plan,
+        "session_ranges": session_ranges,
         "news": news,
         "quant_score": stock.get("total_score"),
         "risk_adjusted_score": stock.get("risk_adjusted_score"),
@@ -156,3 +171,98 @@ def _view(score: float, avoid: bool) -> str:
     if score >= 50:
         return "neutral"
     return "avoid"
+
+
+def _build_trade_plan(
+    stock: Dict[str, Any],
+    technical: Dict[str, Any],
+    short_score: float,
+    long_score: float,
+    avoid: Dict[str, Any],
+) -> Dict[str, Any]:
+    price = float(technical.get("price") or stock.get("price") or 0)
+    if price <= 0:
+        return {"action": "no_trade", "error": "price_unavailable"}
+    atr = float(technical.get("atr_14") or price * 0.025)
+    bb_lower = technical.get("bb_lower")
+    bb_upper = technical.get("bb_upper")
+    ema21 = technical.get("ema_21")
+    sma50 = technical.get("sma_50")
+    bullish = short_score >= 60 and not avoid.get("active")
+    bearish = short_score < 45 or (avoid.get("active") and long_score < 50)
+    if bullish:
+        stance, action, setup = "bullish", "buy", "pullback_or_breakout"
+        support_candidates = [value for value in (ema21, sma50, bb_lower) if value and value < price]
+        support = max(support_candidates) if support_candidates else price - atr
+        entry_low = max(support, price - 0.75 * atr)
+        entry_high = price + 0.15 * atr
+        stop = min(entry_low - 0.8 * atr, support - 0.35 * atr)
+        risk = max(entry_high - stop, atr)
+        targets = [entry_high + 1.5 * risk, entry_high + 2.5 * risk]
+        confirmation = max(price + 0.25 * atr, float(bb_upper or 0))
+        execution = "Regular session; use a limit order after the first 15 minutes"
+    elif bearish:
+        stance, action, setup = "bearish", "avoid_or_hedge", "failed_rally_or_breakdown"
+        resistance_candidates = [value for value in (ema21, sma50, bb_upper) if value and value > price]
+        resistance = min(resistance_candidates) if resistance_candidates else price + atr
+        entry_low = price - 0.15 * atr
+        entry_high = min(resistance, price + 0.75 * atr)
+        stop = max(entry_high + 0.8 * atr, resistance + 0.35 * atr)
+        risk = max(stop - entry_low, atr)
+        targets = [max(0.01, entry_low - 1.5 * risk), max(0.01, entry_low - 2.5 * risk)]
+        confirmation = max(0.01, min(price - 0.25 * atr, float(bb_lower or price)))
+        execution = "Regular session; wait for a failed rally or confirmed breakdown"
+    else:
+        stance, action, setup = "neutral", "watch", "wait_for_confirmation"
+        entry_low, entry_high = price - 0.5 * atr, price + 0.5 * atr
+        stop, risk = price - 1.5 * atr, 1.5 * atr
+        targets = [price + 1.5 * atr, price + 2.5 * atr]
+        confirmation = price + atr
+        execution = "No immediate entry; reassess during regular-session liquidity"
+    return {
+        "stance": stance,
+        "action": action,
+        "setup": setup,
+        "execution_window": execution,
+        "entry_zone": {"low": round(entry_low, 2), "high": round(entry_high, 2)},
+        "confirmation_price": round(confirmation, 2),
+        "stop_loss": round(stop, 2),
+        "targets": [round(value, 2) for value in targets],
+        "risk_reward": [1.5, 2.5],
+        "atr_14": round(atr, 2),
+        "method": "Deterministic ATR and observed support/resistance levels",
+    }
+
+
+def _build_options_plan(options: Dict[str, Any], trade_plan: Dict[str, Any]) -> Dict[str, Any]:
+    stance = trade_plan.get("stance")
+    if options.get("error") or stance not in {"bullish", "bearish"}:
+        return {"action": "none", "reason": options.get("error") or "No directional edge"}
+    option_type = "call" if stance == "bullish" else "put"
+    candidates = options.get("calls" if option_type == "call" else "puts", [])
+    liquid = [
+        contract for contract in candidates
+        if contract.get("ask") and contract.get("ask") > 0
+        and contract.get("bid") is not None
+        and (contract.get("open_interest", 0) >= 100 or contract.get("volume", 0) >= 25)
+        and (contract.get("spread_pct") is None or contract["spread_pct"] <= 20)
+    ]
+    if not liquid:
+        return {"action": "none", "reason": "No sufficiently liquid near-the-money contract"}
+    contract = liquid[0]
+    entry = contract.get("mid") or contract.get("ask")
+    if not entry:
+        return {"action": "none", "reason": "Option premium unavailable"}
+    return {
+        "action": "buy_to_open",
+        "option_type": option_type,
+        "expiry": options.get("selected_expiry") or options.get("nearest_expiry"),
+        "contract": contract,
+        "max_entry_premium": round(min(float(contract["ask"]), float(entry) * 1.05), 2),
+        "stop_premium": round(float(entry) * 0.65, 2),
+        "take_profit_premiums": [round(float(entry) * 1.35, 2), round(float(entry) * 1.7, 2)],
+        "exit_rule": "Scale out at +35% and +70%; exit before expiry or on underlying invalidation",
+        "underlying_invalidation": trade_plan.get("stop_loss"),
+        "max_position_risk_pct": 1.0,
+        "method": "Nearest liquid near-the-money contract with at least 21 DTE when available",
+    }

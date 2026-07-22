@@ -4,7 +4,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 from agents import deep_research
-from agents.deep_research import _avoid_assessment, _long_term_score, _short_term_score
+from agents.deep_research import (
+    _avoid_assessment,
+    _build_options_plan,
+    _build_trade_plan,
+    _long_term_score,
+    _short_term_score,
+)
 
 
 def test_deep_scores_reward_aligned_ema_trend() -> None:
@@ -40,6 +46,8 @@ def test_analyze_ticker_fetches_only_requested_stock(monkeypatch) -> None:
         "sma_200": 82, "adx_14": 25,
     })
     monkeypatch.setattr(deep_research, "fetch_news", lambda *args, **kwargs: [])
+    monkeypatch.setattr(deep_research, "fetch_options_chain", lambda *args, **kwargs: {"error": "none"})
+    monkeypatch.setattr(deep_research, "fetch_trading_session_ranges", lambda *args, **kwargs: {"sessions": {}})
     monkeypatch.setattr(deep_research, "suggest_trading_strategy", lambda *args, **kwargs: {"reasoning": "ok"})
 
     result = deep_research.analyze_ticker("AAPL")
@@ -47,6 +55,44 @@ def test_analyze_ticker_fetches_only_requested_stock(monkeypatch) -> None:
     assert fetched == ["AAPL"]
     assert result["ticker"] == "AAPL"
     assert result["quant_score"] is not None
+
+
+def test_bullish_trade_plan_has_ordered_levels() -> None:
+    technical = {"price": 100, "atr_14": 4, "ema_21": 97, "sma_50": 94, "bb_lower": 92, "bb_upper": 106}
+
+    plan = _build_trade_plan({}, technical, 75, 70, {"active": False})
+
+    assert plan["stance"] == "bullish"
+    assert plan["stop_loss"] < plan["entry_zone"]["low"] < plan["entry_zone"]["high"]
+    assert plan["targets"][0] > plan["entry_zone"]["high"]
+
+
+def test_bearish_trade_plan_has_ordered_levels() -> None:
+    technical = {"price": 100, "atr_14": 4, "ema_21": 103, "sma_50": 106, "bb_lower": 94, "bb_upper": 108}
+
+    plan = _build_trade_plan({}, technical, 35, 40, {"active": True})
+
+    assert plan["stance"] == "bearish"
+    assert plan["stop_loss"] > plan["entry_zone"]["high"]
+    assert plan["targets"][0] < plan["entry_zone"]["low"]
+
+
+def test_options_plan_selects_liquid_contract_and_sets_premium_exits() -> None:
+    options = {
+        "selected_expiry": "2026-08-21",
+        "calls": [
+            {"strike": 100, "bid": 2.0, "ask": 4.0, "mid": 3.0, "open_interest": 10, "volume": 0, "spread_pct": 66.7},
+            {"strike": 105, "bid": 2.4, "ask": 2.6, "mid": 2.5, "open_interest": 500, "volume": 100, "spread_pct": 8.0},
+        ],
+        "puts": [],
+    }
+
+    plan = _build_options_plan(options, {"stance": "bullish", "stop_loss": 95})
+
+    assert plan["action"] == "buy_to_open"
+    assert plan["contract"]["strike"] == 105
+    assert plan["max_entry_premium"] == 2.6
+    assert plan["stop_premium"] < plan["max_entry_premium"] < plan["take_profit_premiums"][0]
 
 
 def test_analyze_tickers_keeps_partial_failures(monkeypatch) -> None:

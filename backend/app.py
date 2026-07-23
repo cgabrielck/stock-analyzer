@@ -120,6 +120,11 @@ def _inject_apple_css() -> None:
     div[data-testid="stMetric"] { background:linear-gradient(145deg,var(--panel-2),var(--panel)); border:1px solid var(--line); border-radius:8px; padding:.72rem .85rem; min-height:82px; }
     div[data-testid="stMetric"] label { color:var(--muted) !important; font-family:var(--mono); font-size:.72rem !important; letter-spacing:.05em; text-transform:uppercase; }
     div[data-testid="stMetric"] [data-testid="stMetricValue"] { color:var(--text); font-family:var(--mono); font-size:1.12rem; font-weight:700; }
+    [class*="st-key-execution_plan_"] [data-testid="stMetricValue"] {
+        color:var(--text) !important; font-variant-numeric:tabular-nums; white-space:nowrap;
+        font-size:1rem !important; letter-spacing:-.02em;
+    }
+    [class*="st-key-execution_plan_"] [data-testid="stMetricDelta"] { display:none; }
     div[data-testid="stMetricDelta"] { font-family:var(--mono); font-size:.66rem; }
 
     .stExpander { background:var(--panel); border:1px solid var(--line) !important; border-radius:8px !important; margin-bottom:.55rem; overflow:hidden; }
@@ -1290,12 +1295,29 @@ def _render_deep_research_result(
         st.markdown("**" + t("deep.execution_plan", lang) + "**")
         entry = trade.get("entry_zone", {})
         targets = trade.get("targets", [])
-        plan_cols = st.columns(4)
-        plan_cols[0].metric(t("deep.entry_zone", lang), _price_range(entry.get("low"), entry.get("high")))
-        plan_cols[1].metric(t("deep.confirmation", lang), _currency(trade.get("confirmation_price")))
-        plan_cols[2].metric(t("deep.stop", lang), _currency(trade.get("stop_loss")))
-        plan_cols[3].metric(t("deep.targets", lang), " / ".join(_currency(value) for value in targets) or "N/A")
+        bearish_plan = trade.get("stance") == "bearish"
+        entry_label = t("deep.short_entry_zone", lang) if bearish_plan else t("deep.entry_zone", lang)
+        confirmation_label = t("deep.bearish_confirmation", lang) if bearish_plan else t("deep.confirmation", lang)
+        stop_label = t("deep.cover_stop", lang) if bearish_plan else t("deep.stop", lang)
+        targets_label = t("deep.downside_targets", lang) if bearish_plan else t("deep.targets", lang)
+        with st.container(key=f"execution_plan_{ticker}"):
+            plan_cols = st.columns(4)
+            plan_cols[0].metric(entry_label, _price_range(entry.get("low"), entry.get("high")))
+            plan_cols[1].metric(confirmation_label, _currency(trade.get("confirmation_price")))
+            plan_cols[2].metric(stop_label, _currency(trade.get("stop_loss")))
+            plan_cols[3].metric(targets_label, " / ".join(_currency(value) for value in targets) or "N/A")
+        if bearish_plan:
+            st.warning(t("deep.bearish_stop_note", lang))
         st.caption(f"{t('deep.execution_window', lang)}: {trade.get('execution_window', 'N/A')}")
+        timing = result.get("timing", {}).get("stages", {})
+        if timing:
+            st.caption(t(
+                "deep.source_timing", lang,
+                fundamental=timing.get("fundamental", {}).get("duration_ms", 0),
+                technical=timing.get("technical", {}).get("duration_ms", 0),
+                market=timing.get("market_data", {}).get("duration_ms", 0),
+                llm=timing.get("strategy", {}).get("duration_ms", 0),
+            ))
         entry_reference = entry.get("high") if trade.get("stance") == "bullish" else entry.get("low")
         risk_per_share = abs(float(entry_reference) - float(trade.get("stop_loss"))) if entry_reference and trade.get("stop_loss") else None
         account_risk = float(st.session_state.get("picks_account_capital", 100000)) * float(st.session_state.get("picks_risk_budget_pct", 1.0)) / 100
@@ -1442,6 +1464,25 @@ def _render_deep_research_result(
         elif strategy.get("error"):
             st.warning(t("deep.llm_unavailable", lang))
         else:
+            explanation = strategy.get("decision_explanation", {})
+            if explanation:
+                st.markdown("**" + t("deep.llm_decision_explanation", lang, label=str(explanation.get("label", "neutral")).upper()) + "**")
+                if explanation.get("why"):
+                    st.write(explanation["why"])
+                view_explanations = explanation.get("view_explanations", {})
+                if view_explanations.get("short_term"):
+                    st.write(f"**{t('deep.short', lang)}:** {view_explanations['short_term']}")
+                if view_explanations.get("long_term"):
+                    st.write(f"**{t('deep.long', lang)}:** {view_explanations['long_term']}")
+                for key, title_key in (
+                    ("supporting_evidence", "deep.llm_supporting_evidence"),
+                    ("counter_evidence", "deep.llm_counter_evidence"),
+                    ("change_conditions", "deep.llm_change_conditions"),
+                ):
+                    if explanation.get(key):
+                        st.markdown("**" + t(title_key, lang) + "**")
+                        for item in explanation[key]:
+                            st.markdown(f"- {item}")
             st.write(strategy.get("reasoning", ""))
             scenario = strategy.get("scenario", {})
             if scenario:
@@ -1459,7 +1500,7 @@ def _pair(first: Any, second: Any) -> str:
 
 
 def _currency(value: Any) -> str:
-    return f"${value:.2f}" if isinstance(value, (int, float)) else "N/A"
+    return f"${value:,.2f}" if isinstance(value, (int, float)) else "N/A"
 
 
 def _percent(value: Any) -> str:

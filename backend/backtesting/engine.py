@@ -48,6 +48,7 @@ from backtesting.statistics import (
     effective_sample_size,
 )
 from backtesting.universe import HistoricalUniverse
+from agents.alpha_vantage_data import fetch_daily_adjusted
 from utils.cache import cache
 from utils.constants import STOCK_UNIVERSE, SCORING_WEIGHTS
 from utils.selection import MIN_RECOMMENDATION_METRICS, select_recommendations
@@ -76,6 +77,9 @@ def _fetch_single_price(ticker: str, start: str, end: str) -> Optional[pd.DataFr
             return df
     except Exception:
         pass
+    alpha_history = fetch_daily_adjusted(ticker, start=start, end=end)
+    if alpha_history:
+        return alpha_history["data"]
     return None
 
 

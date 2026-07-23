@@ -26,12 +26,29 @@ def analyze_ticker(
     force_refresh: bool = False,
     progress_callback: Optional[ProgressCallback] = None,
 ) -> Dict[str, Any]:
+    analysis_started = time.monotonic()
     _emit(progress_callback, ticker, "fundamental", "started")
-    stock = fetch_stock_data(ticker, force_refresh=force_refresh)
+    _emit(progress_callback, ticker, "technical", "started")
+    def timed(call: Callable[..., Dict[str, Any]], *args: Any, **kwargs: Any) -> tuple[Dict[str, Any], int]:
+        started = time.monotonic()
+        value = call(*args, **kwargs)
+        return value, round((time.monotonic() - started) * 1000)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        stock_future = executor.submit(timed, fetch_stock_data, ticker, force_refresh=force_refresh)
+        technical_future = executor.submit(
+            timed, compute_technical_indicators, ticker, period="1y", force_refresh=force_refresh,
+        )
+        stock, fundamental_ms = stock_future.result()
+        technical, technical_ms = technical_future.result()
     if stock.get("error"):
         _emit(progress_callback, ticker, "fundamental", "failed")
         return {"ticker": ticker, "error": stock["error"], "stage": "fundamental"}
     _emit(progress_callback, ticker, "fundamental", "completed")
+    if technical.get("error"):
+        _emit(progress_callback, ticker, "technical", "failed")
+        return {"ticker": ticker, "error": technical["error"], "stage": "technical", "technical": technical}
+    _emit(progress_callback, ticker, "technical", "completed")
 
     metadata = next((item for item in STOCK_UNIVERSE if item["ticker"] == ticker), {})
     for key in ("name_cn", "name_tw", "name_en", "sector", "universe_tier"):
@@ -45,23 +62,25 @@ def analyze_ticker(
         "score_details": details,
         "metrics_used": metrics_used,
     })
-    _emit(progress_callback, ticker, "technical", "started")
-    technical = compute_technical_indicators(ticker, period="1y", force_refresh=force_refresh)
-    if technical.get("error"):
-        _emit(progress_callback, ticker, "technical", "failed")
-        return {"ticker": ticker, "error": technical["error"], "stage": "technical"}
-    _emit(progress_callback, ticker, "technical", "completed")
-
     technical_score = technical.get("technical_score")
     if technical_score is not None:
         stock["technical_score"] = technical_score
         stock["total_score"] = round(growth_score * 0.7 + technical_score * 0.3, 1)
     stock["risk_metrics"] = technical.get("risk_metrics", {"available": False})
     stock.update(calculate_risk_adjusted_score(stock["total_score"], stock["risk_metrics"]))
-    return analyze_selected_stock(
+    result = analyze_selected_stock(
         stock, lang=lang, technical=technical, progress_callback=progress_callback,
         force_refresh=force_refresh,
     )
+    result["timing"] = {
+        "total_ms": round((time.monotonic() - analysis_started) * 1000),
+        "stages": {
+            "fundamental": {"duration_ms": fundamental_ms},
+            "technical": {"duration_ms": technical_ms},
+            **result.get("timing", {}).get("stages", {}),
+        },
+    }
+    return result
 
 
 def analyze_tickers(
@@ -127,6 +146,7 @@ def analyze_selected_stock(
     trade_plan = _build_trade_plan(stock, technical, short_score, long_score, avoid)
     current_price = technical.get("price") or stock.get("price") or 0
     _emit(progress_callback, ticker, "market_data", "started")
+    market_started = time.monotonic()
     provider_executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
     provider_futures = {
         "options": provider_executor.submit(fetch_options_chain, ticker, current_price=current_price, force_refresh=force_refresh),
@@ -154,8 +174,12 @@ def analyze_selected_stock(
         "news": "unavailable" if not news else None,
     }
     options_plan = _build_options_plan(options, trade_plan)
+    market_ms = round((time.monotonic() - market_started) * 1000)
     _emit(progress_callback, ticker, "market_data", "completed")
     _emit(progress_callback, ticker, "strategy", "started")
+    strategy_started = time.monotonic()
+    short_view = _view(short_score, avoid["active"])
+    long_view = _view(long_score, avoid["active"] and long_score < 50)
     strategy = suggest_trading_strategy(
         ticker,
         stock,
@@ -164,18 +188,28 @@ def analyze_selected_stock(
         options_data=options,
         news_data=news,
         lang=lang,
+        decision_context={
+            "stance": trade_plan.get("stance"),
+            "action": trade_plan.get("action"),
+            "short_view": short_view,
+            "long_view": long_view,
+            "short_score": short_score,
+            "long_score": long_score,
+            "avoid_reasons": avoid.get("reasons", []),
+        },
     )
+    strategy_ms = round((time.monotonic() - strategy_started) * 1000)
     _emit(progress_callback, ticker, "strategy", "failed" if strategy.get("error") else "completed")
     return {
         "ticker": ticker,
         "short_term": {
             "score": short_score,
-            "view": _view(short_score, avoid["active"]),
+            "view": short_view,
             "horizon": "5-20 trading days",
         },
         "long_term": {
             "score": long_score,
-            "view": _view(long_score, avoid["active"] and long_score < 50),
+            "view": long_view,
             "horizon": "6-18 months",
         },
         "avoid": avoid,
@@ -201,6 +235,12 @@ def analyze_selected_stock(
             },
             "options": {key: options.get(key) for key in ("source", "fetched_at", "as_of", "from_cache")},
             "sessions": {key: session_ranges.get(key) for key in ("source", "fetched_at", "as_of", "from_cache")},
+        },
+        "timing": {
+            "stages": {
+                "market_data": {"duration_ms": market_ms},
+                "strategy": {"duration_ms": strategy_ms},
+            },
         },
     }
 
@@ -289,7 +329,13 @@ def _build_trade_plan(
     price = float(technical.get("price") or stock.get("price") or 0)
     if price <= 0:
         return {"action": "no_trade", "error": "price_unavailable"}
-    atr = float(technical.get("atr_14") or price * 0.025)
+    atr = max(abs(float(technical.get("atr_14") or price * 0.025)), price * 0.005)
+    if atr > price * 0.5:
+        return {
+            "stance": "neutral", "action": "no_trade", "position_side": "none",
+            "stop_type": "invalidation_only", "error": "price_scale_mismatch",
+            "reference_price": round(price, 2), "atr_14": round(atr, 2),
+        }
     bb_lower = technical.get("bb_lower")
     bb_upper = technical.get("bb_upper")
     ema21 = technical.get("ema_21")
@@ -298,6 +344,7 @@ def _build_trade_plan(
     bearish = short_score < 45 or (avoid.get("active") and long_score < 50)
     if bullish:
         stance, action, setup = "bullish", "buy", "pullback_or_breakout"
+        position_side, stop_type = "long", "sell_stop"
         support_candidates = [value for value in (ema21, sma50, bb_lower) if value and value < price]
         support = max(support_candidates) if support_candidates else price - atr
         entry_low = max(support, price - 0.75 * atr)
@@ -309,6 +356,7 @@ def _build_trade_plan(
         execution = "Regular session; use a limit order after the first 15 minutes"
     elif bearish:
         stance, action, setup = "bearish", "avoid_or_hedge", "failed_rally_or_breakdown"
+        position_side, stop_type = "short_or_hedge", "buy_to_cover_stop"
         resistance_candidates = [value for value in (ema21, sma50, bb_upper) if value and value > price]
         resistance = min(resistance_candidates) if resistance_candidates else price + atr
         entry_low = price - 0.15 * atr
@@ -320,6 +368,7 @@ def _build_trade_plan(
         execution = "Regular session; wait for a failed rally or confirmed breakdown"
     else:
         stance, action, setup = "neutral", "watch", "wait_for_confirmation"
+        position_side, stop_type = "none", "invalidation_only"
         entry_low, entry_high = price - 0.5 * atr, price + 0.5 * atr
         stop, risk = price - 1.5 * atr, 1.5 * atr
         targets = [price + 1.5 * atr, price + 2.5 * atr]
@@ -328,6 +377,8 @@ def _build_trade_plan(
     return {
         "stance": stance,
         "action": action,
+        "position_side": position_side,
+        "stop_type": stop_type,
         "setup": setup,
         "execution_window": execution,
         "entry_zone": {"low": round(entry_low, 2), "high": round(entry_high, 2)},

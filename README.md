@@ -281,7 +281,7 @@ CLI mode:
 PYTHONPATH=backend python backend/run_agent.py
 ```
 
-## LLM Configuration / LLM 設定
+## API Configuration / API 設定
 
 LLM analysis is optional. Configure an OpenAI-compatible provider in `.env` locally or Streamlit Secrets in cloud deployment:
 
@@ -290,11 +290,14 @@ LLM_API_KEY=your-api-key
 LLM_BASE_URL=https://api.example.com/v1
 LLM_MODEL=deepseek-chat
 LLM_REASONING_MODEL=deepseek-reasoner
+ALPHA_VANTAGE_API_KEY=your-alpha-vantage-key
 ```
 
 `deepseek-chat` handles batch scoring and structured JSON tasks. `deepseek-reasoner` is reserved for on-demand single-stock strategy analysis, where deeper reasoning is worth the additional latency and cost.
 
 Do not commit `.env` or API keys. The repository ignores `.env`, virtual environments, caches, portfolio state, and trade journals.
+
+Alpha Vantage is optional. When configured, it supplies company overview, income statements, balance sheets, cash flow, earnings, and adjusted daily-price fallback data. Fundamentals are cached for 24 hours to protect provider quotas. Yahoo remains responsible for session-aware pre-market, regular-market, and after-hours quotes. If Alpha Vantage is unavailable or rate-limited, the existing Yahoo/China/seed fallback chain continues automatically.
 
 ## Testing / 測試
 
@@ -305,7 +308,7 @@ Do not commit `.env` or API keys. The repository ignores `.env`, virtual environ
 Current verified result:
 
 ```text
-67 passed
+145 passed
 ```
 
 Additional checks:
@@ -320,8 +323,18 @@ git diff --check
 1. Push the repository to GitHub.
 2. Connect it at [share.streamlit.io](https://share.streamlit.io).
 3. Set the entry point to `backend/app.py`.
-4. Add optional LLM variables under Streamlit Secrets.
-5. Set app visibility as required.
+4. Open the app's **Settings → Secrets** and add root-level TOML values:
+
+```toml
+ALPHA_VANTAGE_API_KEY = "replace-with-a-new-key"
+LLM_API_KEY = "your-llm-key"
+LLM_BASE_URL = "https://api.example.com/v1"
+LLM_MODEL = "deepseek-chat"
+LLM_REASONING_MODEL = "deepseek-reasoner"
+```
+
+Only `ALPHA_VANTAGE_API_KEY` is required for Alpha Vantage. The LLM values remain optional. Do not add quotes around the variable name, do not paste `.env` syntax such as `KEY=value` into the TOML editor, and never commit `.streamlit/secrets.toml`.
+5. Save Secrets, reboot the app if Streamlit does not restart it automatically, and set app visibility as required.
 
 Every push to `main` triggers a Streamlit Cloud redeploy.
 

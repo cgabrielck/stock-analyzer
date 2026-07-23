@@ -58,12 +58,44 @@ def test_analyze_ticker_fetches_only_requested_stock(monkeypatch) -> None:
     assert result["quant_score"] is not None
 
 
+def test_fundamental_and_technical_sources_run_in_parallel(monkeypatch) -> None:
+    def fundamentals(ticker, **kwargs):
+        time.sleep(0.08)
+        return {
+            "ticker": ticker, "revenue_growth": 20, "eps_growth": 20, "profit_margin": 20,
+            "peg": 1, "roe": 20, "debt_equity": 0.5,
+        }
+
+    def technical(*args, **kwargs):
+        time.sleep(0.08)
+        return {
+            "technical_score": 70, "price": 100, "risk_metrics": {"available": False},
+            "ema_9": 101, "ema_21": 100, "ema_50": 95, "sma_50": 96, "adx_14": 25,
+        }
+
+    monkeypatch.setattr(deep_research, "fetch_stock_data", fundamentals)
+    monkeypatch.setattr(deep_research, "compute_technical_indicators", technical)
+    monkeypatch.setattr(deep_research, "fetch_news", lambda *args, **kwargs: [])
+    monkeypatch.setattr(deep_research, "fetch_options_chain", lambda *args, **kwargs: {"error": "none"})
+    monkeypatch.setattr(deep_research, "fetch_trading_session_ranges", lambda *args, **kwargs: {"sessions": {}})
+    monkeypatch.setattr(deep_research, "suggest_trading_strategy", lambda *args, **kwargs: {"reasoning": "ok"})
+    started = time.monotonic()
+
+    result = deep_research.analyze_ticker("TEST")
+
+    assert time.monotonic() - started < 0.14
+    assert result["timing"]["stages"]["fundamental"]["duration_ms"] >= 70
+    assert result["timing"]["stages"]["technical"]["duration_ms"] >= 70
+
+
 def test_bullish_trade_plan_has_ordered_levels() -> None:
     technical = {"price": 100, "atr_14": 4, "ema_21": 97, "sma_50": 94, "bb_lower": 92, "bb_upper": 106}
 
     plan = _build_trade_plan({}, technical, 75, 70, {"active": False})
 
     assert plan["stance"] == "bullish"
+    assert plan["position_side"] == "long"
+    assert plan["stop_type"] == "sell_stop"
     assert plan["stop_loss"] < plan["entry_zone"]["low"] < plan["entry_zone"]["high"]
     assert plan["targets"][0] > plan["entry_zone"]["high"]
 
@@ -74,8 +106,26 @@ def test_bearish_trade_plan_has_ordered_levels() -> None:
     plan = _build_trade_plan({}, technical, 35, 40, {"active": True})
 
     assert plan["stance"] == "bearish"
+    assert plan["position_side"] == "short_or_hedge"
+    assert plan["stop_type"] == "buy_to_cover_stop"
     assert plan["stop_loss"] > plan["entry_zone"]["high"]
     assert plan["targets"][0] < plan["entry_zone"]["low"]
+
+
+def test_bearish_plan_never_presents_cover_stop_as_long_stop_for_reported_tickers() -> None:
+    for ticker, price, atr in (("TSLA", 320, 14), ("MU", 130, 6), ("ASTS", 45, 4)):
+        technical = {
+            "ticker": ticker, "price": price, "atr_14": atr,
+            "ema_21": price * 1.03, "sma_50": price * 1.08,
+            "bb_lower": price * 0.9, "bb_upper": price * 1.12,
+        }
+
+        plan = _build_trade_plan({}, technical, 35, 40, {"active": True})
+
+        assert plan["stance"] == "bearish"
+        assert plan["stop_type"] == "buy_to_cover_stop"
+        assert plan["targets"][1] <= plan["targets"][0] < plan["entry_zone"]["low"]
+        assert plan["entry_zone"]["low"] < plan["entry_zone"]["high"] < plan["stop_loss"]
 
 
 def test_options_plan_selects_liquid_contract_and_sets_premium_exits() -> None:

@@ -16,6 +16,9 @@ from utils.cache import cache
 from utils.price_utils import get_latest_price, get_latest_quote, get_session_ranges
 from agents.auto_upgrader import agent_state
 from agents.sec_analyzer import ticker_to_cik
+from agents.alpha_vantage_data import fetch_fundamentals as fetch_alpha_fundamentals
+from agents.alpha_vantage_data import is_configured as alpha_vantage_configured
+from agents.alpha_vantage_data import fetch_global_quote as fetch_alpha_global_quote
 try:
     from agents.china_data_fetcher import clear_provider_cache, fetch_china_data, fetch_china_daily
 except ImportError:
@@ -144,6 +147,26 @@ def fetch_stock_data(ticker: str, force_refresh: bool = False) -> Dict[str, Any]
         clear_provider_cache(ticker)
 
     last_error: Optional[str] = None
+    alpha_executor = None
+    alpha_future = None
+    alpha_fund = None
+    if alpha_vantage_configured():
+        alpha_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        alpha_future = alpha_executor.submit(fetch_alpha_fundamentals, ticker, force_refresh)
+
+    def resolve_alpha() -> Optional[Dict[str, Any]]:
+        nonlocal alpha_executor, alpha_future, alpha_fund
+        if alpha_future is not None:
+            try:
+                alpha_fund = alpha_future.result(timeout=20)
+            except Exception:
+                alpha_fund = None
+            finally:
+                if alpha_executor is not None:
+                    alpha_executor.shutdown(wait=False, cancel_futures=True)
+                alpha_executor = None
+                alpha_future = None
+        return alpha_fund
 
     for attempt in range(3):
         try:
@@ -213,6 +236,15 @@ def fetch_stock_data(ticker: str, force_refresh: bool = False) -> Dict[str, Any]
             if financials is not None:
                 result.update(_extract_financials(financials, balance_sheet, cashflow))
 
+            alpha_fund = resolve_alpha()
+            alpha_meta = {}
+            if alpha_fund:
+                alpha_meta = alpha_fund.get("_alpha_meta", {})
+                for key, value in alpha_fund.items():
+                    if not key.startswith("_") and key not in {"ticker", "sector"}:
+                        result[key] = value
+                result["data_source"] = "alpha_vantage+yfinance"
+
             try:
                 esg_data = stock.sustainability
                 if esg_data is not None and not esg_data.empty:
@@ -228,12 +260,21 @@ def fetch_stock_data(ticker: str, force_refresh: bool = False) -> Dict[str, Any]
             except Exception as e:
                 agent_state.log_source_result(f"insider:{ticker}", False, str(e))
 
+            components = [{"source": "yfinance", "role": "quote_and_supplemental_data" if alpha_fund else "fundamentals_and_quote"}]
+            if alpha_fund:
+                components.insert(0, {
+                    "source": "alpha_vantage", "role": "fundamentals",
+                    "endpoints": alpha_meta.get("endpoints", []), "as_of": alpha_meta.get("as_of"),
+                })
             result["data_quality"] = _data_quality(
-                result, "yfinance", "live", stale=bool(result.get("price_stale")),
-                as_of=result.get("price_quote_time") or result["fetched_at"],
-                components=[{"source": "yfinance", "role": "fundamentals_and_quote"}],
+                result, result["data_source"], "hybrid" if alpha_fund else "live",
+                stale=bool(result.get("price_stale")),
+                as_of=alpha_meta.get("as_of") if alpha_fund else result.get("price_quote_time") or result["fetched_at"],
+                components=components,
             )
 
+            if alpha_fund:
+                agent_state.log_source_result(f"alpha_vantage:{ticker}", True)
             agent_state.log_source_result(f"yfinance:{ticker}", True)
             cache.set(ticker, "info", result)
             return result
@@ -243,6 +284,35 @@ def fetch_stock_data(ticker: str, force_refresh: bool = False) -> Dict[str, Any]
             agent_state.log_source_result(f"yfinance:{ticker}", False, last_error)
             if attempt < 2:
                 _time.sleep(2 ** attempt)
+
+    alpha_fund = resolve_alpha()
+    if alpha_fund:
+        result = {key: value for key, value in alpha_fund.items() if not key.startswith("_")}
+        alpha_meta = alpha_fund.get("_alpha_meta", {})
+        quote = _fetch_price_fallback(ticker) or fetch_alpha_global_quote(ticker, force_refresh=force_refresh)
+        if quote:
+            result.update(quote)
+        result.update({
+            "ticker": ticker,
+            "cik": ticker_to_cik(ticker),
+            "fetched_at": _now_str(),
+            "data_source": "alpha_vantage+yahoo_chart" if quote and quote.get("_fallback") else "alpha_vantage",
+            "sector": next((s["sector"] for s in STOCK_UNIVERSE if s["ticker"] == ticker), result.get("sector")),
+        })
+        components = [{
+            "source": "alpha_vantage", "role": "fundamentals",
+            "endpoints": alpha_meta.get("endpoints", []), "as_of": alpha_meta.get("as_of"),
+        }]
+        if quote:
+            components.append({"source": "yahoo_chart" if quote.get("_fallback") else "alpha_vantage", "role": "quote"})
+        result["data_quality"] = _data_quality(
+            result, result["data_source"], "hybrid" if len(components) > 1 else "live",
+            is_fallback=True, stale=bool(result.get("price_stale", True)),
+            as_of=alpha_meta.get("as_of"), components=components,
+        )
+        cache.set(ticker, "info", result)
+        agent_state.log_source_result(f"alpha_vantage:{ticker}", True)
+        return result
 
     china = fetch_china_data(ticker) if fetch_china_data else None
     if china:

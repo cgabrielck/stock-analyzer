@@ -413,8 +413,21 @@ Respond in JSON only:
   "risk_reward": <float or null>,
   "time_horizon": "<short description>",
   "scenario": {"best": "...", "base": "...", "worst": "..."},
+  "decision_explanation": {
+    "label": "bullish|bearish|avoid|watch|neutral",
+    "why": "<clear explanation of why the deterministic model assigned this label>",
+    "supporting_evidence": ["<evidence>", "<evidence>"],
+    "counter_evidence": ["<risk or conflicting evidence>"],
+    "change_conditions": ["<specific condition that would change the label>"],
+    "view_explanations": {
+      "short_term": "<why the deterministic short-term view is bullish, neutral, watch, or avoid>",
+      "long_term": "<why the deterministic long-term view is bullish, neutral, watch, or avoid>"
+    }
+  },
   "reasoning": "<2-3 sentence analysis>"
-}"""
+}
+
+The deterministic decision context is authoritative. Explain its label and evidence; do not replace its stance, action, entry, stop, targets, or position size. Distinguish avoid (explicit risk/data/trend blockers), watch (wait for confirmation), neutral (balanced evidence), bullish, and bearish. Write all explanation text in the requested output language."""
 
 
 def suggest_trading_strategy(
@@ -425,6 +438,7 @@ def suggest_trading_strategy(
     options_data: Optional[Dict[str, Any]] = None,
     news_data: Optional[list] = None,
     lang: str = "zh_tw",
+    decision_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     client = _get_client()
     if client is None:
@@ -446,6 +460,10 @@ def suggest_trading_strategy(
         data_block += f"  Max Put OI: {options_data.get('max_put_oi')}\n"
     if news_data:
         data_block += _build_news_block(news_data)
+    language = {"zh_cn": "Simplified Chinese", "zh_tw": "Traditional Chinese", "en": "English"}.get(lang, "Traditional Chinese")
+    if decision_context:
+        data_block += f"\n-- Authoritative deterministic decision --\n{json.dumps(decision_context, ensure_ascii=False)}\n"
+    data_block += f"\nOutput language: {language}\n"
 
     try:
         resp = _create_completion(
@@ -471,11 +489,40 @@ def suggest_trading_strategy(
             "risk_reward": parsed.get("risk_reward"),
             "time_horizon": parsed.get("time_horizon"),
             "scenario": parsed.get("scenario", {}),
+            "decision_explanation": _normalize_decision_explanation(
+                parsed.get("decision_explanation"), decision_context
+            ),
             "reasoning": parsed.get("reasoning", ""),
         }
     except Exception as e:
         agent_state.log_source_result(f"llm_strategy:{ticker}", False, str(e))
         return {"error": str(e)}
+
+
+def _normalize_decision_explanation(
+    value: Any, decision_context: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    value = value if isinstance(value, dict) else {}
+    context = decision_context or {}
+    action = context.get("action")
+    expected = "avoid" if action == "avoid_or_hedge" and context.get("avoid_reasons") else (
+        "watch" if action == "watch" else context.get("stance", "neutral")
+    )
+    label = expected
+    def items(key: str) -> list[str]:
+        raw = value.get(key)
+        return [str(item)[:300] for item in raw[:4]] if isinstance(raw, list) else []
+    return {
+        "label": label,
+        "why": str(value.get("why") or "")[:1200],
+        "supporting_evidence": items("supporting_evidence"),
+        "counter_evidence": items("counter_evidence"),
+        "change_conditions": items("change_conditions"),
+        "view_explanations": {
+            key: str((value.get("view_explanations") or {}).get(key) or "")[:600]
+            for key in ("short_term", "long_term")
+        } if isinstance(value.get("view_explanations"), dict) else {},
+    }
 
 
 def analyze_news_impact(

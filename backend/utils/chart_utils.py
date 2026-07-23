@@ -5,6 +5,8 @@ import requests
 import streamlit as st
 import yfinance as yf
 
+from agents.alpha_vantage_data import fetch_daily_adjusted
+
 
 CHART_INTERVALS: Dict[str, Tuple[str, str]] = {
     "1m": ("1m", "5d"),
@@ -42,6 +44,22 @@ def fetch_chart_data(ticker: str, interval: str, extended_hours: bool) -> Dict[s
         errors.append("yfinance returned insufficient history")
     except Exception as exc:
         errors.append(f"yfinance: {type(exc).__name__}: {exc}")
+
+    if not is_intraday:
+        alpha_history = fetch_daily_adjusted(ticker, period=period)
+        if alpha_history:
+            frame = normalize_chart_frame(alpha_history["data"], False, False)
+            if len(frame) >= 10:
+                return {
+                    "data": frame,
+                    "provider": "alpha_vantage",
+                    "interval": "1d",
+                    "period": period,
+                    "extended_hours": False,
+                    "adjusted": True,
+                    "as_of": alpha_history.get("as_of"),
+                }
+        errors.append("Alpha Vantage returned insufficient daily history")
 
     try:
         history = _fetch_yahoo_chart_http(ticker, yf_interval, period, extended_hours and is_intraday)

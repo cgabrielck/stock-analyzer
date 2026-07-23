@@ -10,6 +10,7 @@ from utils.cache import cache
 from utils.price_utils import get_latest_quote
 from agents.risk_analyzer import calculate_risk_metrics, risk_label
 from agents.auto_upgrader import agent_state
+from agents.alpha_vantage_data import fetch_daily_adjusted
 
 
 def _compute_rsi(series: pd.Series, length: int = 14) -> float:
@@ -143,7 +144,7 @@ def calculate_technical_score(data: Dict[str, Any]) -> float:
 def compute_technical_indicators(
     ticker: str, period: str = "6mo", force_refresh: bool = False,
 ) -> Dict[str, Any]:
-    cache_key = f"tech_v2_{ticker}_{period}"
+    cache_key = f"tech_v3_{ticker}_{period}"
     if not force_refresh:
         cached = cache.get(cache_key, "info")
         if cached:
@@ -153,7 +154,16 @@ def compute_technical_indicators(
 
     try:
         stock = yf.Ticker(ticker)
-        hist = stock.history(period=period)
+        history_source = "yfinance_history"
+        try:
+            hist = stock.history(period=period, auto_adjust=True)
+        except Exception:
+            hist = pd.DataFrame()
+        if hist is None or hist.empty or len(hist) < 50:
+            alpha_history = fetch_daily_adjusted(ticker, period=period, force_refresh=force_refresh)
+            if alpha_history:
+                hist = alpha_history["data"]
+                history_source = "alpha_vantage_daily_adjusted"
         if hist is None or hist.empty or len(hist) < 50:
             return {"ticker": ticker, "error": "insufficient_history"}
 
@@ -165,6 +175,15 @@ def compute_technical_indicators(
         last_close = float(close.iloc[-1])
         latest_quote = get_latest_quote(stock, fallback_close=last_close)
         current_price = latest_quote["price"]
+        price_scale_ratio = float(current_price / last_close) if current_price and last_close > 0 else None
+        if price_scale_ratio is not None and not 0.5 <= price_scale_ratio <= 1.5:
+            return {
+                "ticker": ticker,
+                "error": "price_scale_mismatch",
+                "history_last_close": round(last_close, 4),
+                "current_price": current_price,
+                "quote_to_history_ratio": round(price_scale_ratio, 4),
+            }
         price_session = latest_quote["session"]
         rsi_val = _compute_rsi(close, 14)
         macd_line, macd_signal, macd_hist = _compute_macd(close)
@@ -187,7 +206,12 @@ def compute_technical_indicators(
             "price_quote_time": latest_quote["quote_time"],
             "price_market_state": latest_quote["market_state"],
             "price_stale": latest_quote["stale"],
-            "technical_source": "yfinance_history",
+            "technical_source": history_source,
+            "technical_adjusted": True,
+            "technical_price_basis": "latest_share_basis",
+            "history_last_close": round(last_close, 4),
+            "quote_to_history_ratio": round(price_scale_ratio, 4) if price_scale_ratio is not None else None,
+            "price_scale_status": "aligned",
             "technical_period": period,
             "technical_as_of": hist.index[-1].isoformat() if hasattr(hist.index[-1], "isoformat") else str(hist.index[-1]),
             "technical_fetched_at": pd.Timestamp.now(tz="UTC").isoformat(),

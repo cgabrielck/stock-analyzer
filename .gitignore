@@ -6,6 +6,7 @@ venv/
 .venv312/
 env/
 .env
+.streamlit/secrets.toml
 *.egg-info/
 dist/
 build/

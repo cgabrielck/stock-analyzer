@@ -60,3 +60,34 @@ def test_invalid_ohlcv_returns_empty_frame() -> None:
     frame = chart_utils.normalize_chart_frame(pd.DataFrame({"Close": [100]}), False, False)
 
     assert frame.empty
+
+
+def test_daily_chart_uses_alpha_vantage_before_yahoo_http(monkeypatch) -> None:
+    class EmptyTicker:
+        def __init__(self, ticker):
+            self.ticker = ticker
+
+        def history(self, **kwargs):
+            return pd.DataFrame()
+
+    history = pd.DataFrame({
+        "Open": [100 + i for i in range(12)],
+        "High": [101 + i for i in range(12)],
+        "Low": [99 + i for i in range(12)],
+        "Close": [100.5 + i for i in range(12)],
+        "Volume": [1000 + i for i in range(12)],
+    }, index=pd.date_range("2026-01-01", periods=12, freq="B"))
+    monkeypatch.setattr(chart_utils.yf, "Ticker", EmptyTicker)
+    monkeypatch.setattr(chart_utils, "fetch_daily_adjusted", lambda *args, **kwargs: {
+        "data": history, "provider": "alpha_vantage", "as_of": "2026-01-16",
+    })
+    monkeypatch.setattr(
+        chart_utils, "_fetch_yahoo_chart_http",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("Yahoo HTTP should not run")),
+    )
+    chart_utils.fetch_chart_data.clear()
+
+    result = chart_utils.fetch_chart_data("TEST", "1d", False)
+
+    assert result["provider"] == "alpha_vantage"
+    assert result["adjusted"] is True

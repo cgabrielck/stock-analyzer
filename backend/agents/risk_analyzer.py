@@ -124,14 +124,73 @@ def fetch_risk_metrics(tickers: Iterable[str], period: str = "1y") -> Dict[str, 
 
 
 def calculate_portfolio_risk(
-    price_history: pd.DataFrame, weights: Dict[str, float], benchmark_prices: Optional[pd.Series] = None,
+    price_history: pd.DataFrame, market_values: Dict[str, float], cash: float = 0.0,
 ) -> Dict[str, Any]:
-    """Calculate a weighted portfolio risk profile from a supplied price panel."""
-    valid_weights = {ticker: weight for ticker, weight in weights.items() if ticker in price_history and weight > 0}
-    if not valid_weights:
-        return {"available": False, "reason": "no_positions"}
-    returns = price_history[list(valid_weights)].pct_change().dropna(how="all").fillna(0)
-    total_weight = sum(valid_weights.values())
-    portfolio_returns = sum(returns[ticker] * weight / total_weight for ticker, weight in valid_weights.items())
-    synthetic_prices = (1 + portfolio_returns).cumprod() * 100
-    return calculate_risk_metrics(synthetic_prices, benchmark_prices)
+    """Calculate cash-aware covariance risk using current position market values."""
+    values = {
+        ticker: float(value) for ticker, value in market_values.items()
+        if isinstance(value, (int, float)) and np.isfinite(value) and value > 0
+    }
+    if not values:
+        return {"available": False, "reason": "no_positions", "stress_tests": []}
+    equity_value = sum(values.values())
+    portfolio_value = equity_value + max(0.0, float(cash or 0))
+    actual_weights = {ticker: value / portfolio_value for ticker, value in values.items()}
+    stress_tests = []
+    for scenario, shock in (("market_correction_10", -0.10), ("bear_market_20", -0.20)):
+        pnl = equity_value * shock
+        stress_tests.append({
+            "scenario": scenario, "equity_shock_pct": shock * 100, "pnl": round(pnl, 2),
+            "portfolio_change_pct": round(pnl / portfolio_value * 100, 2),
+            "stressed_value": round(portfolio_value + pnl, 2),
+        })
+
+    prices = price_history.copy() if isinstance(price_history, pd.DataFrame) else pd.DataFrame()
+    prices = prices[~prices.index.duplicated(keep="last")].sort_index().tail(RISK_LOOKBACK_PRICES)
+    excluded: Dict[str, str] = {}
+    eligible = []
+    returns_by_ticker = {}
+    for ticker in sorted(values, key=values.get, reverse=True):
+        if ticker not in prices:
+            excluded[ticker] = "price_unavailable"
+            continue
+        series = pd.to_numeric(prices[ticker], errors="coerce")
+        series = series.where(np.isfinite(series) & (series > 0))
+        returns = series.pct_change(fill_method=None)
+        if returns.notna().sum() < MIN_RETURN_OBSERVATIONS:
+            excluded[ticker] = "insufficient_history"
+            continue
+        candidate = eligible + [ticker]
+        candidate_frame = pd.concat([returns_by_ticker.get(t, returns if t == ticker else None) for t in candidate], axis=1)
+        candidate_frame.columns = candidate
+        if len(candidate_frame.dropna()) < MIN_RETURN_OBSERVATIONS:
+            excluded[ticker] = "insufficient_overlap"
+            continue
+        eligible.append(ticker)
+        returns_by_ticker[ticker] = returns
+
+    covered_value = sum(values[ticker] for ticker in eligible)
+    base = {
+        "actual_weights": {ticker: round(weight, 6) for ticker, weight in actual_weights.items()},
+        "cash_weight_pct": round(max(0.0, float(cash or 0)) / portfolio_value * 100, 2),
+        "equity_coverage_pct": round(covered_value / equity_value * 100, 2),
+        "portfolio_coverage_pct": round(covered_value / portfolio_value * 100, 2),
+        "coverage_status": "full" if len(eligible) == len(values) else "partial" if eligible else "none",
+        "covered_tickers": eligible, "excluded_tickers": excluded, "stress_tests": stress_tests,
+    }
+    if not eligible:
+        return {"available": False, "reason": "insufficient_history", "observations": 0, **base}
+    aligned = pd.concat([returns_by_ticker[ticker] for ticker in eligible], axis=1).dropna()
+    aligned.columns = eligible
+    weights = np.array([actual_weights[ticker] for ticker in eligible])
+    covariance = aligned.cov().to_numpy()
+    variance = float(weights @ covariance @ weights)
+    portfolio_returns = aligned.to_numpy() @ weights
+    cumulative = pd.Series(1 + portfolio_returns).cumprod()
+    return {
+        "available": True, "observations": len(aligned),
+        "annual_volatility_pct": round(float(np.sqrt(max(variance, 0)) * np.sqrt(TRADING_DAYS) * 100), 2),
+        "var_95_daily_pct": round(float(np.percentile(portfolio_returns, 5)) * 100, 2),
+        "max_drawdown_pct": round(float((cumulative / cumulative.cummax() - 1).min()) * 100, 2),
+        **base,
+    }

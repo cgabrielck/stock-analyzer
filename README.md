@@ -291,6 +291,8 @@ LLM_BASE_URL=https://api.example.com/v1
 LLM_MODEL=deepseek-chat
 LLM_REASONING_MODEL=deepseek-reasoner
 ALPHA_VANTAGE_API_KEY=your-alpha-vantage-key
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your-server-side-service-role-key
 ```
 
 `deepseek-chat` handles batch scoring and structured JSON tasks. `deepseek-reasoner` is reserved for on-demand single-stock strategy analysis, where deeper reasoning is worth the additional latency and cost.
@@ -308,7 +310,7 @@ Alpha Vantage is optional. When configured, it supplies company overview, income
 Current verified result:
 
 ```text
-150 passed
+179 passed
 ```
 
 Additional checks:
@@ -331,9 +333,11 @@ LLM_API_KEY = "your-llm-key"
 LLM_BASE_URL = "https://api.example.com/v1"
 LLM_MODEL = "deepseek-chat"
 LLM_REASONING_MODEL = "deepseek-reasoner"
+SUPABASE_URL = "https://your-project.supabase.co"
+SUPABASE_SERVICE_ROLE_KEY = "your-server-side-service-role-key"
 ```
 
-Only `ALPHA_VANTAGE_API_KEY` is required for Alpha Vantage. The LLM values remain optional. Do not add quotes around the variable name, do not paste `.env` syntax such as `KEY=value` into the TOML editor, and never commit `.streamlit/secrets.toml`.
+Only `ALPHA_VANTAGE_API_KEY` is required for Alpha Vantage. The LLM and Supabase values remain optional. Do not add quotes around the variable name, do not paste `.env` syntax such as `KEY=value` into the TOML editor, and never commit `.streamlit/secrets.toml`.
 5. Save Secrets, reboot the app if Streamlit does not restart it automatically, and set app visibility as required.
 
 Every push to `main` triggers a Streamlit Cloud redeploy.
@@ -341,6 +345,25 @@ Every push to `main` triggers a Streamlit Cloud redeploy.
 ## Privacy and Persistence / 隱私與持久化
 
 `data/portfolio_state.json` and `data/trade_journal.json` are local runtime files and are intentionally excluded from Git. On ephemeral cloud hosting, local file changes may be lost after a restart or redeploy. Use an external database before relying on the journal as a permanent multi-user ledger.
+
+### Optional Accounts and Favorites
+
+Guest analysis works without account configuration. To enable persistent username/PIN accounts, Favorites, and preferences:
+
+1. Create a Supabase project.
+2. Run `backend/persistence/migrations/001_accounts.sql`, `002_saved_plan_alerts.sql`, then `003_saved_plan_outcomes.sql`, in the Supabase SQL editor.
+3. Add `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` to server-side Streamlit Secrets.
+4. Restart the app.
+
+The service-role key bypasses row-level security and must never be exposed in browser code or committed to Git. The account adapter is called only by Streamlit server-side Python. Direct access through Supabase's public anon/authenticated roles remains denied because the migration enables RLS without public policies.
+
+The current product requirement stores PIN values as plaintext and allows any PIN format. A database operator or database leak can therefore reveal every PIN. Use unique PINs that are not reused for other services. One-way PIN hashing is strongly recommended before production use.
+
+Authenticated users can save deterministic Deep Research plans, compare a re-analysis with the active plan, explicitly replace it with an immutable new version, review version history, and confirm direction-aware price alert rules. Replacing a plan invalidates its prior alert rules and requires explicit reconfirmation against the new levels.
+
+Alert rules are persistence-only until Phase 3. `monitoring_enabled` remains false: the Streamlit process does not poll prices or send notifications. Production monitoring still requires an external five-minute worker, fresh non-stale quote validation, idempotent transition handling, and configured Email/Telegram providers.
+
+Deep Research also includes bounded SEC filing evidence with direct EDGAR citations. Saved-plan outcome journals can be evaluated on demand at 5, 20, and 60 completed trading sessions using raw daily OHLC and exact-date SPY comparison. Outcome observations are educational research records, not brokerage fills. The model portfolio reports cash-aware covariance volatility, historical VaR, coverage, and transparent -10%/-20% equity stress scenarios.
 
 ## Disclaimer / 免責聲明
 

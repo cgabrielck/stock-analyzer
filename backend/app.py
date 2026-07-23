@@ -20,6 +20,10 @@ from utils.constants import (
     VALUATION_RANGES,
 )
 from i18n import t
+from account_ui import render_account_panel
+from accounts.factory import get_account_repository
+from accounts.session import hydrate_account_state
+from saved_plan_ui import render_saved_plan_controls
 
 from agents.data_fetcher import fetch_industry_news
 
@@ -266,6 +270,7 @@ def build_sidebar() -> Dict[str, Any]:
         st.session_state.lang = selected_lang
         st.rerun()
     params["lang"] = selected_lang
+    render_account_panel(get_account_repository(), selected_lang, st.session_state)
 
     st.sidebar.markdown(
         f'<div class="sidebar-section">{t("sidebar.sector_set", selected_lang)}</div>',
@@ -415,18 +420,9 @@ def build_sidebar() -> Dict[str, Any]:
 
     st.sidebar.markdown("<hr style='margin:1.2rem 0;'>", unsafe_allow_html=True)
     params["run_clicked"] = False
-    col1, col2 = st.sidebar.columns(2)
-    with col1:
-        params["force_refresh"] = st.checkbox(t("sidebar.refresh", selected_lang), value=False, key="force_refresh_cb")
-    with col2:
-        if st.button(t("sidebar.clear_cache", selected_lang), type="secondary", width="stretch"):
-            from utils.cache import cache
-            cache.clear()
-            for key in ["recommendations", "all_rankings", "source_health", "scored_data"]:
-                if key in st.session_state:
-                    del st.session_state[key]
-            st.session_state.analysis_done = False
-            st.rerun()
+    params["force_refresh"] = st.sidebar.checkbox(
+        t("sidebar.refresh", selected_lang), value=False, key="force_refresh_cb"
+    )
 
     return params
 
@@ -1348,6 +1344,7 @@ def _render_deep_research_result(
         if bearish_plan:
             st.warning(t("deep.bearish_stop_note", lang))
         st.caption(f"{t('deep.execution_window', lang)}: {trade.get('execution_window', 'N/A')}")
+        render_saved_plan_controls(ticker, result, lang, get_account_repository())
         timing = result.get("timing", {}).get("stages", {})
         if timing:
             st.caption(t(
@@ -1507,6 +1504,29 @@ def _render_deep_research_result(
             tech_cols[1].metric("EMA 9 / 21", _pair(technical.get("ema_9"), technical.get("ema_21")))
             tech_cols[2].metric("ADX 14", _number(technical.get("adx_14")))
             tech_cols[3].metric("ATR 14", _number(technical.get("atr_14")))
+            sec = result.get("sec_evidence", {})
+            st.markdown("**" + t("deep.sec_evidence", lang) + "**")
+            if sec.get("available") and sec.get("url"):
+                st.write(t(
+                    "deep.sec_filing_meta", lang, form=sec.get("form_type") or "N/A",
+                    filed=sec.get("filing_date") or "N/A", period=sec.get("report_date") or "N/A",
+                ))
+                st.link_button(t("deep.sec_view_filing", lang), sec["url"])
+                for title, excerpt in list(((sec.get("insights") or {}).get("sections") or {}).items())[:3]:
+                    st.markdown(f"**{title}**")
+                    st.write(str(excerpt)[:800])
+                st.caption(t("deep.sec_excerpt_note", lang))
+                provenance = sec.get("provenance", {})
+                st.caption(t(
+                    "deep.sec_source_caption", lang,
+                    accession=sec.get("accession_number") or "N/A",
+                    fetched=_format_timestamp(provenance.get("fetched_at")),
+                    status=t("provenance.cached", lang) if provenance.get("from_cache") else t("provenance.live", lang),
+                ))
+            else:
+                status = sec.get("status", "unavailable")
+                status = status if status in {"timeout", "not_found"} else "unavailable"
+                st.info(t(f"deep.sec_{status}", lang))
         elif strategy.get("error"):
             error_code = strategy.get("error_code", "provider_error")
             st.warning(t(f"deep.llm_unavailable_{error_code}", lang))
@@ -2010,6 +2030,11 @@ def render_our_picks_page(lang: str, force_refresh: bool = False) -> None:
     st.subheader(t("deep.pool_title", lang))
     st.caption(t("deep.pool_desc_independent", lang, n=len(STOCK_UNIVERSE)))
     stock_by_ticker = {stock["ticker"]: stock for stock in STOCK_UNIVERSE}
+    for ticker in st.session_state.get("account_favorites", []):
+        stock_by_ticker.setdefault(
+            ticker,
+            {"ticker": ticker, "name_cn": ticker, "name_tw": ticker, "name_en": ticker, "sector": "Favorites"},
+        )
     selected = st.multiselect(
         t("deep.selector", lang),
         list(stock_by_ticker),
@@ -2614,17 +2639,33 @@ def render_portfolio_tab() -> None:
         unsafe_allow_html=True,
     )
 
-    risk_positions = [p.get("risk_metrics", {}) for p in positions if p.get("risk_metrics", {}).get("available")]
-    if risk_positions:
+    portfolio_risk = portfolio.get("portfolio_risk", {})
+    if portfolio_risk:
         st.subheader(t("portfolio.risk_overview", lang))
-        risk_cols = st.columns(3)
+        risk_cols = st.columns(4)
         with risk_cols[0]:
-            st.metric("Avg volatility", f"{sum(p['annual_volatility_pct'] for p in risk_positions) / len(risk_positions):.1f}%")
+            st.metric(t("portfolio.portfolio_volatility", lang), f"{portfolio_risk.get('annual_volatility_pct', 0):.1f}%" if portfolio_risk.get("available") else "N/A")
         with risk_cols[1]:
-            st.metric("Worst VaR 95%", f"{min(p['var_95_daily_pct'] for p in risk_positions):.2f}%")
+            st.metric(t("portfolio.daily_var_95", lang), f"{portfolio_risk.get('var_95_daily_pct', 0):.2f}%" if portfolio_risk.get("available") else "N/A")
         with risk_cols[2]:
-            high_risk = sum(p.get("risk_level") == "high" for p in risk_positions)
-            st.metric("High-risk positions", f"{high_risk}/{len(risk_positions)}")
+            st.metric(t("portfolio.history_coverage", lang), f"{portfolio_risk.get('equity_coverage_pct', 0):.1f}%")
+        with risk_cols[3]:
+            st.metric(t("portfolio.cash_weight", lang), f"{portfolio_risk.get('cash_weight_pct', 0):.1f}%")
+        if portfolio_risk.get("coverage_status") == "partial":
+            excluded = ", ".join(
+                f"{ticker} ({reason})" for ticker, reason in portfolio_risk.get("excluded_tickers", {}).items()
+            )
+            st.warning(t("portfolio.coverage_warning", lang, tickers=excluded or "N/A"))
+        stress_tests = portfolio_risk.get("stress_tests", [])
+        if stress_tests:
+            st.markdown("**" + t("portfolio.stress_tests", lang) + "**")
+            st.dataframe(pd.DataFrame([{
+                t("portfolio.scenario", lang): t(f"portfolio.scenario.{row['scenario']}", lang),
+                t("portfolio.equity_shock", lang): f"{row['equity_shock_pct']:.0f}%",
+                t("portfolio.stress_loss", lang): f"${row['pnl']:,.0f}",
+                t("portfolio.portfolio_change", lang): f"{row['portfolio_change_pct']:.1f}%",
+                t("portfolio.stressed_value", lang): f"${row['stressed_value']:,.0f}",
+            } for row in stress_tests]), hide_index=True, width="stretch")
 
     high_corr = portfolio.get("high_corr_pairs", [])
     if high_corr:
@@ -2646,7 +2687,9 @@ def render_portfolio_tab() -> None:
             t("portfolio.score", lang): p["total_score"],
             t("risk.selection_score", lang): p.get("risk_adjusted_score", p["total_score"]),
             t("risk.penalty", lang): f"-{p.get('risk_penalty', 0):.0f}",
-            t("portfolio.weight", lang): f"{p['weight']*100:.1f}%",
+            t("portfolio.target_weight", lang): f"{p['weight']*100:.1f}%",
+            t("portfolio.actual_weight", lang): f"{p.get('actual_weight', 0)*100:.1f}%",
+            t("portfolio.market_value", lang): f"${p.get('market_value', 0):,.0f}",
             t("portfolio.shares", lang): p["shares"],
             t("portfolio.entry_price", lang): f"${p['entry_price']:.2f}",
             t("portfolio.current_price", lang): f"${p['current_price']:.2f}",
@@ -2689,6 +2732,7 @@ def build_minimal_sidebar() -> Dict[str, Any]:
     if selected_lang != lang:
         st.session_state.lang = selected_lang
         st.rerun()
+    render_account_panel(get_account_repository(), selected_lang, st.session_state)
     force_refresh = st.sidebar.checkbox(t("sidebar.refresh", selected_lang), value=False, key="picks_force_refresh")
     return {"lang": selected_lang, "force_refresh": force_refresh}
 
@@ -2765,6 +2809,9 @@ def render_scan_page(params: Dict[str, Any], lang: str) -> None:
 def main() -> None:
     st.set_page_config(page_title="Stock Analyzer", page_icon="", layout="wide")
     init_state()
+    account_repository = get_account_repository()
+    if account_repository is not None:
+        hydrate_account_state(st.session_state, account_repository)
     _inject_apple_css()
 
     st.markdown("""<script>

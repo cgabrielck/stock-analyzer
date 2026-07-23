@@ -8,16 +8,20 @@ from agents.data_fetcher import (
     fetch_options_chain,
     fetch_stock_data,
     fetch_trading_session_ranges,
+    get_seed_fallback,
 )
 from agents.fundamental_analyzer import calculate_growth_score
 from agents.llm_agent import suggest_trading_strategy
 from agents.risk_analyzer import calculate_risk_adjusted_score
+from agents.sec_analyzer import get_latest_filing
 from agents.technical_analyzer import compute_technical_indicators
 from utils.constants import STOCK_UNIVERSE
 
 
 ProgressCallback = Callable[[Dict[str, Any]], None]
 MARKET_DATA_TIMEOUT_SECONDS = 12.0
+CORE_DATA_TIMEOUT_SECONDS = 35.0
+DEFAULT_BATCH_TIMEOUT_SECONDS = 150.0
 
 
 def analyze_ticker(
@@ -34,13 +38,31 @@ def analyze_ticker(
         value = call(*args, **kwargs)
         return value, round((time.monotonic() - started) * 1000)
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+    try:
         stock_future = executor.submit(timed, fetch_stock_data, ticker, force_refresh=force_refresh)
         technical_future = executor.submit(
             timed, compute_technical_indicators, ticker, period="1y", force_refresh=force_refresh,
         )
-        stock, fundamental_ms = stock_future.result()
-        technical, technical_ms = technical_future.result()
+        done, _ = concurrent.futures.wait(
+            (stock_future, technical_future), timeout=CORE_DATA_TIMEOUT_SECONDS,
+        )
+        if stock_future in done:
+            stock, fundamental_ms = stock_future.result()
+        else:
+            stock_future.cancel()
+            stock = get_seed_fallback(ticker, "fundamental_timeout") or {
+                "ticker": ticker, "error": "fundamental_timeout",
+            }
+            fundamental_ms = round(CORE_DATA_TIMEOUT_SECONDS * 1000)
+        if technical_future in done:
+            technical, technical_ms = technical_future.result()
+        else:
+            technical_future.cancel()
+            technical = {"ticker": ticker, "error": "technical_timeout"}
+            technical_ms = round(CORE_DATA_TIMEOUT_SECONDS * 1000)
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
     if stock.get("error"):
         _emit(progress_callback, ticker, "fundamental", "failed")
         return {"ticker": ticker, "error": stock["error"], "stage": "fundamental"}
@@ -88,7 +110,7 @@ def analyze_tickers(
     lang: str = "zh_tw",
     force_refresh: bool = False,
     progress_callback: Optional[ProgressCallback] = None,
-    batch_timeout_seconds: float = 90.0,
+    batch_timeout_seconds: float = DEFAULT_BATCH_TIMEOUT_SECONDS,
 ) -> Dict[str, Dict[str, Any]]:
     unordered: Dict[str, Dict[str, Any]] = {}
     events: queue.Queue[Dict[str, Any]] = queue.Queue()
@@ -147,11 +169,17 @@ def analyze_selected_stock(
     current_price = technical.get("price") or stock.get("price") or 0
     _emit(progress_callback, ticker, "market_data", "started")
     market_started = time.monotonic()
-    provider_executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
+    provider_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+    market_deadline = time.monotonic() + MARKET_DATA_TIMEOUT_SECONDS
     provider_futures = {
         "options": provider_executor.submit(fetch_options_chain, ticker, current_price=current_price, force_refresh=force_refresh),
         "sessions": provider_executor.submit(fetch_trading_session_ranges, ticker, force_refresh=force_refresh),
         "news": provider_executor.submit(fetch_news, ticker, max_items=5, force_refresh=force_refresh),
+        "sec": provider_executor.submit(
+            get_latest_filing, stock.get("cik"), ticker, lang,
+            force_refresh=force_refresh, include_llm_summary=False,
+            deadline_monotonic=market_deadline,
+        ),
     }
     done, pending = concurrent.futures.wait(provider_futures.values(), timeout=MARKET_DATA_TIMEOUT_SECONDS)
     values: Dict[str, Any] = {}
@@ -168,10 +196,12 @@ def analyze_selected_stock(
     options = values["options"]
     session_ranges = values["sessions"]
     news = values["news"]
+    sec_evidence = values["sec"]
     enrichment_errors = {
         "options": options.get("error") if isinstance(options, dict) else None,
         "sessions": session_ranges.get("error") if isinstance(session_ranges, dict) else None,
         "news": "unavailable" if not news else None,
+        "sec": sec_evidence.get("status") if not sec_evidence.get("available") else None,
     }
     options_plan = _build_options_plan(options, trade_plan)
     market_ms = round((time.monotonic() - market_started) * 1000)
@@ -221,6 +251,7 @@ def analyze_selected_stock(
         "session_ranges": session_ranges,
         "validation": {"available": False, "reason": "not_run"},
         "news": news,
+        "sec_evidence": sec_evidence,
         "enrichment_errors": {key: value for key, value in enrichment_errors.items() if value},
         "quant_score": stock.get("total_score"),
         "risk_adjusted_score": stock.get("risk_adjusted_score"),
@@ -235,6 +266,7 @@ def analyze_selected_stock(
             },
             "options": {key: options.get(key) for key in ("source", "fetched_at", "as_of", "from_cache")},
             "sessions": {key: session_ranges.get(key) for key in ("source", "fetched_at", "as_of", "from_cache")},
+            "sec": sec_evidence.get("provenance", {}),
         },
         "timing": {
             "stages": {

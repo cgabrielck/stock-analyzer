@@ -125,6 +125,34 @@ def _data_quality(
     }
 
 
+def get_seed_fallback(ticker: str, reason: str = "provider_timeout") -> Optional[Dict[str, Any]]:
+    seed = _SEED_DATA.get(ticker)
+    if not seed:
+        return None
+    result = dict(seed)
+    snapshot_as_of = _seed_as_of(result)
+    result.update({
+        "ticker": ticker,
+        "snapshot_as_of": snapshot_as_of,
+        "fetched_at": _now_str(),
+        "data_source": "seed_data",
+        "fallback_reason": reason,
+    })
+    result["data_quality"] = _data_quality(
+        result,
+        "seed_data",
+        "seed",
+        is_fallback=True,
+        stale=True,
+        as_of=snapshot_as_of,
+        components=[{
+            "source": "seed_data", "role": "fundamentals",
+            "as_of": snapshot_as_of, "stale": True, "fallback_reason": reason,
+        }],
+    )
+    return result
+
+
 def fetch_stock_data(ticker: str, force_refresh: bool = False) -> Dict[str, Any]:
     if not force_refresh:
         cached = cache.get(ticker, "info")

@@ -76,9 +76,10 @@ def test_negative_correlation_is_not_flagged_as_concentration(monkeypatch) -> No
     })
     monkeypatch.setattr(portfolio_manager.yf, "download", lambda *args, **kwargs: prices)
 
-    _, high_pairs = compute_correlations(["A", "B"])
+    _, high_pairs, close = compute_correlations(["A", "B"])
 
     assert high_pairs == []
+    assert list(close.columns) == ["A", "B"]
 
 
 def test_positive_correlation_is_flagged(monkeypatch) -> None:
@@ -88,13 +89,13 @@ def test_positive_correlation_is_flagged(monkeypatch) -> None:
     })
     monkeypatch.setattr(portfolio_manager.yf, "download", lambda *args, **kwargs: prices)
 
-    _, high_pairs = compute_correlations(["A", "B"])
+    _, high_pairs, _ = compute_correlations(["A", "B"])
 
     assert high_pairs == [("A", "B", 1.0)]
 
 
 def test_portfolio_uses_supplied_session_state_and_includes_cash(monkeypatch) -> None:
-    monkeypatch.setattr(portfolio_manager, "compute_correlations", lambda tickers: (None, []))
+    monkeypatch.setattr(portfolio_manager, "compute_correlations", lambda tickers: (None, [], pd.DataFrame()))
     monkeypatch.setattr(portfolio_manager, "load_calibration_snapshot", lambda: {})
     recommendations = [{"ticker": "A", "total_score": 80, "price": 100, "risk_metrics": {"available": True}}]
 

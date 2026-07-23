@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
-from agents.risk_analyzer import fetch_risk_metrics
+from agents.risk_analyzer import calculate_portfolio_risk, fetch_risk_metrics
 from backtesting.calibration import load_calibration_snapshot, probability_from_snapshot
 
 
@@ -108,19 +108,21 @@ def calculate_portfolio_weights(
     return normalize_capped_weights(raw_weights, target_allocation=target_allocation), "calibrated_kelly"
 
 
-def compute_correlations(tickers: List[str], period: str = "1y") -> Tuple[Optional[pd.DataFrame], List[Tuple[str, str, float]]]:
+def compute_correlations(tickers: List[str], period: str = "1y") -> Tuple[Optional[pd.DataFrame], List[Tuple[str, str, float]], pd.DataFrame]:
     valid = [t for t in tickers if t]
-    if len(valid) < 2:
-        return None, []
+    if not valid:
+        return None, [], pd.DataFrame()
 
     try:
         data = yf.download(valid, period=period, progress=False, auto_adjust=True)
         if data.empty:
-            return None, []
+            return None, [], pd.DataFrame()
         close = data["Close"] if "Close" in data.columns else data
+        if isinstance(close, pd.Series):
+            close = close.to_frame(name=valid[0])
         returns = close.pct_change().dropna()
         if returns.empty or returns.shape[1] < 2:
-            return None, []
+            return None, [], close
         corr = returns.corr()
         high_pairs: List[Tuple[str, str, float]] = []
         for i in range(len(corr.columns)):
@@ -128,9 +130,9 @@ def compute_correlations(tickers: List[str], period: str = "1y") -> Tuple[Option
                 val = corr.iloc[i, j]
                 if val >= CORR_THRESHOLD:
                     high_pairs.append((corr.columns[i], corr.columns[j], round(val, 3)))
-        return corr, high_pairs
+        return corr, high_pairs, close
     except Exception:
-        return None, []
+        return None, [], pd.DataFrame()
 
 
 def _load_journal() -> List[Dict[str, Any]]:
@@ -191,7 +193,7 @@ def build_portfolio(
     updated_journal = list(journal or [])
     old_positions = saved.get("positions", {})
     all_tickers = [r["ticker"] for r in recommendations]
-    corr, high_pairs = compute_correlations(all_tickers)
+    corr, high_pairs, close_history = compute_correlations(all_tickers)
 
     weights, weighting_method = calculate_portfolio_weights(recommendations, target_allocation=target_allocation)
 
@@ -236,6 +238,7 @@ def build_portfolio(
             "entry_date": entry_date,
             "current_price": price,
             "shares": shares,
+            "market_value": round(price * shares, 2),
             "weight": weight,
             "kelly_pct": round(weight * 100, 1),
             "weighting_method": weighting_method,
@@ -252,10 +255,17 @@ def build_portfolio(
 
     positions.sort(key=lambda p: p["weight"], reverse=True)
     total_invested = sum(p["entry_price"] * p["shares"] for p in positions)
-    total_pnl = sum(p["pnl"] for p in positions)
-    holdings_value = total_invested + total_pnl
+    holdings_value = sum(p["market_value"] for p in positions)
+    total_pnl = holdings_value - total_invested
     cash = total_capital - total_invested
     portfolio_value = cash + holdings_value
+    for position in positions:
+        position["actual_weight"] = position["market_value"] / portfolio_value if portfolio_value > 0 else 0
+    portfolio_risk = calculate_portfolio_risk(
+        close_history,
+        {position["ticker"]: position["market_value"] for position in positions if position["market_value"] > 0},
+        cash=cash,
+    )
 
     new_state = {
         "positions": {p["ticker"]: {"entry_price": p["entry_price"], "entry_date": p["entry_date"]} for p in positions},
@@ -274,11 +284,13 @@ def build_portfolio(
         "total_capital": total_capital,
         "total_invested": round(total_invested, 2),
         "portfolio_value": round(portfolio_value, 2),
+        "holdings_value": round(holdings_value, 2),
         "cash": round(cash, 2),
         "total_pnl": round(total_pnl, 2),
         "total_pnl_pct": round((total_pnl / total_invested * 100) if total_invested > 0 else 0, 2),
         "high_corr_pairs": high_pairs,
         "correlation_df": corr,
+        "portfolio_risk": portfolio_risk,
         "num_positions": len(positions),
         "weighting_method": weighting_method,
         "session_state": new_state,

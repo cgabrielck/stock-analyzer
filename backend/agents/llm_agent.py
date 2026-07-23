@@ -440,9 +440,13 @@ def suggest_trading_strategy(
     lang: str = "zh_tw",
     decision_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    global _llm_last_check, _llm_healthy
     client = _get_client()
     if client is None:
         return {"error": "LLM not configured"}
+    now = _time.time()
+    if _llm_last_check and now - _llm_last_check < _LLM_HEALTH_TTL and not _llm_healthy:
+        return {"error": "LLM provider temporarily unavailable", "error_code": "provider_error"}
 
     data_block = _build_tech_data_block(ticker, technical_data, current_price)
     data_block += f"\n-- Fundamentals --\n"
@@ -479,6 +483,8 @@ def suggest_trading_strategy(
         )
         text = resp.choices[0].message.content.strip()
         parsed = json.loads(text)
+        _llm_last_check = _time.time()
+        _llm_healthy = True
         agent_state.log_source_result(f"llm_strategy:{ticker}", True)
         return {
             "top_strategy": parsed.get("top_strategy"),
@@ -495,6 +501,8 @@ def suggest_trading_strategy(
             "reasoning": parsed.get("reasoning", ""),
         }
     except Exception as e:
+        _llm_last_check = _time.time()
+        _llm_healthy = False
         agent_state.log_source_result(f"llm_strategy:{ticker}", False, str(e))
         return {"error": str(e), "error_code": _classify_strategy_error(e)}
 

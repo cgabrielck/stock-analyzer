@@ -1,4 +1,5 @@
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
@@ -91,3 +92,14 @@ def test_strategy_error_code_classification() -> None:
         ("429 rate limit", "rate_limit"),
     ):
         assert _classify_strategy_error(RuntimeError(message)) == expected
+
+
+def test_strategy_circuit_breaker_skips_recently_failed_provider(monkeypatch) -> None:
+    monkeypatch.setattr(llm_agent, "_llm_last_check", time.time())
+    monkeypatch.setattr(llm_agent, "_llm_healthy", False)
+    monkeypatch.setattr(llm_agent, "_get_client", lambda: object())
+
+    result = llm_agent.suggest_trading_strategy("AAPL", {}, {}, 100)
+
+    assert result["error_code"] == "provider_error"
+    assert "temporarily unavailable" in result["error"]

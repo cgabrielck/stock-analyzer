@@ -2,6 +2,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 from agents import deep_research
@@ -12,6 +14,13 @@ from agents.deep_research import (
     _long_term_score,
     _short_term_score,
 )
+
+
+@pytest.fixture(autouse=True)
+def _disable_live_sec(monkeypatch):
+    monkeypatch.setattr(deep_research, "get_latest_filing", lambda *args, **kwargs: {
+        "available": False, "status": "not_found", "provenance": {},
+    })
 
 
 def test_deep_scores_reward_aligned_ema_trend() -> None:
@@ -242,6 +251,47 @@ def test_market_data_timeout_keeps_core_result(monkeypatch) -> None:
     assert result["ticker"] == "AAPL"
     assert result["options"]["error"] == "provider_timeout"
     assert result["trade_plan"]["action"] == "buy"
+
+
+def test_fundamental_timeout_uses_seed_and_keeps_deterministic_plan(monkeypatch) -> None:
+    monkeypatch.setattr(deep_research, "CORE_DATA_TIMEOUT_SECONDS", 0.02)
+    monkeypatch.setattr(deep_research, "fetch_stock_data", lambda *args, **kwargs: time.sleep(0.1) or {})
+    monkeypatch.setattr(deep_research, "get_seed_fallback", lambda ticker, reason: {
+        "ticker": ticker, "revenue_growth": 20, "eps_growth": 20, "profit_margin": 20,
+        "peg": 1, "roe": 20, "debt_equity": 0.5,
+        "data_quality": {"source": "seed_data", "is_fallback": True, "stale": True},
+    })
+    monkeypatch.setattr(deep_research, "compute_technical_indicators", lambda *args, **kwargs: {
+        "technical_score": 70, "price": 100, "risk_metrics": {"available": False},
+        "ema_9": 101, "ema_21": 100, "ema_50": 95, "sma_50": 96, "adx_14": 25,
+    })
+    monkeypatch.setattr(deep_research, "fetch_news", lambda *args, **kwargs: [])
+    monkeypatch.setattr(deep_research, "fetch_options_chain", lambda *args, **kwargs: {"error": "none"})
+    monkeypatch.setattr(deep_research, "fetch_trading_session_ranges", lambda *args, **kwargs: {"sessions": {}})
+    monkeypatch.setattr(deep_research, "suggest_trading_strategy", lambda *args, **kwargs: {"reasoning": "ok"})
+
+    started = time.monotonic()
+    result = deep_research.analyze_ticker("AAPL")
+
+    assert time.monotonic() - started < 0.09
+    assert result.get("error") is None
+    assert result["trade_plan"]["action"] != "no_trade"
+    assert result["provenance"]["fundamentals"]["source"] == "seed_data"
+
+
+def test_technical_timeout_fails_only_that_ticker_without_waiting(monkeypatch) -> None:
+    monkeypatch.setattr(deep_research, "CORE_DATA_TIMEOUT_SECONDS", 0.02)
+    monkeypatch.setattr(deep_research, "fetch_stock_data", lambda *args, **kwargs: {"ticker": "AAPL"})
+    monkeypatch.setattr(
+        deep_research, "compute_technical_indicators", lambda *args, **kwargs: time.sleep(0.1) or {},
+    )
+
+    started = time.monotonic()
+    result = deep_research.analyze_ticker("AAPL")
+
+    assert time.monotonic() - started < 0.09
+    assert result["error"] == "technical_timeout"
+    assert result["stage"] == "technical"
 
 
 def test_force_refresh_propagates_to_enrichment_providers(monkeypatch) -> None:

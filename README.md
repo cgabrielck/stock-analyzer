@@ -351,7 +351,7 @@ Every push to `main` triggers a Streamlit Cloud redeploy.
 Guest analysis works without account configuration. To enable persistent username/PIN accounts, Favorites, and preferences:
 
 1. Create a Supabase project.
-2. Run `backend/persistence/migrations/001_accounts.sql`, `002_saved_plan_alerts.sql`, `003_saved_plan_outcomes.sql`, then `004_fix_saved_plan_rpc.sql`, in the Supabase SQL editor.
+2. Run `backend/persistence/migrations/001_accounts.sql`, `002_saved_plan_alerts.sql`, `003_saved_plan_outcomes.sql`, `004_fix_saved_plan_rpc.sql`, then `005_alert_monitoring.sql`, in the Supabase SQL editor.
 3. Add `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` to server-side Streamlit Secrets.
 4. Restart the app.
 
@@ -361,7 +361,15 @@ The current product requirement stores PIN values as plaintext and allows any PI
 
 Authenticated users can save deterministic Deep Research plans, compare a re-analysis with the active plan, explicitly replace it with an immutable new version, review version history, and confirm direction-aware price alert rules. Replacing a plan invalidates its prior alert rules and requires explicit reconfirmation against the new levels.
 
-Alert rules are persistence-only until Phase 3. `monitoring_enabled` remains false: the Streamlit process does not poll prices or send notifications. Production monitoring still requires an external five-minute worker, fresh non-stale quote validation, idempotent transition handling, and configured Email/Telegram providers.
+### Price alert worker
+
+Price alert rules are monitored outside Streamlit so checks continue after the browser closes. Deploy a long-running worker on Railway, Render, or another process host with the same `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`, then run:
+
+```bash
+python backend/alert_worker.py
+```
+
+The default interval is five minutes. Set `ALERT_INTERVAL_SECONDS` to change it. The worker rejects stale Yahoo quotes, triggers only on directional crossings or entry-zone transitions, re-arms after price moves away from the level, and stores duplicate-safe events in the signed-in user's in-app alert inbox. This is periodic/delayed monitoring, not exchange-grade real-time market data.
 
 Deep Research also includes bounded SEC filing evidence with direct EDGAR citations. Saved-plan outcome journals can be evaluated on demand at 5, 20, and 60 completed trading sessions using raw daily OHLC and exact-date SPY comparison. Outcome observations are educational research records, not brokerage fills. The model portfolio reports cash-aware covariance volatility, historical VaR, coverage, and transparent -10%/-20% equity stress scenarios.
 

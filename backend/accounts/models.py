@@ -48,6 +48,17 @@ class AlertRule:
 
 
 @dataclass(frozen=True)
+class AlertEvent:
+    id: str
+    ticker: str
+    event_type: str
+    price: float
+    quote_time: str
+    created_at: str
+    read_at: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class SavedPlanOutcome:
     id: str
     saved_plan_id: str

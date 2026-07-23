@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Protocol, Sequence, Tuple
 
 import requests
 
-from accounts.models import AlertRule, SavedPlanOutcome, SavedPlanVersion, User, UserPreferences
+from accounts.models import AlertEvent, AlertRule, SavedPlanOutcome, SavedPlanVersion, User, UserPreferences
 
 
 def normalize_username(username: str) -> str:
@@ -59,6 +59,10 @@ class AccountRepository(Protocol):
 
     def list_alert_rules(self, user_id: str, plan_id: str) -> List[AlertRule]: ...
 
+    def list_alert_events(self, user_id: str, unread_only: bool = False) -> List[AlertEvent]: ...
+
+    def mark_alert_event_read(self, user_id: str, event_id: str) -> None: ...
+
 
 class UsernameTakenError(ValueError):
     pass
@@ -83,6 +87,7 @@ class InMemoryAccountRepository:
         self._plans: Dict[Tuple[str, str], List[SavedPlanVersion]] = {}
         self._alerts: Dict[Tuple[str, str], List[AlertRule]] = {}
         self._outcomes: Dict[Tuple[str, str, int, int, int], SavedPlanOutcome] = {}
+        self._alert_events: Dict[str, Tuple[str, AlertEvent]] = {}
 
     def register(self, username: str, pin: str) -> User:
         normalized = normalize_username(username)
@@ -222,7 +227,7 @@ class InMemoryAccountRepository:
             saved = [
                 AlertRule(
                     id=str(uuid.uuid4()), saved_plan_id=plan_id, plan_version=plan_version,
-                    event_type=event_type, rule_data=rule_data,
+                    event_type=event_type, rule_data=rule_data, monitoring_enabled=True,
                 )
                 for event_type, rule_data in rules
             ]
@@ -232,6 +237,25 @@ class InMemoryAccountRepository:
     def list_alert_rules(self, user_id: str, plan_id: str) -> List[AlertRule]:
         with self._lock:
             return list(self._alerts.get((user_id, plan_id), []))
+
+    def list_alert_events(self, user_id: str, unread_only: bool = False) -> List[AlertEvent]:
+        with self._lock:
+            events = [event for owner, event in self._alert_events.values() if owner == user_id]
+            if unread_only:
+                events = [event for event in events if event.read_at is None]
+            return sorted(events, key=lambda event: event.created_at, reverse=True)
+
+    def mark_alert_event_read(self, user_id: str, event_id: str) -> None:
+        with self._lock:
+            record = self._alert_events.get(event_id)
+            if not record or record[0] != user_id:
+                return
+            event = record[1]
+            self._alert_events[event_id] = (user_id, AlertEvent(
+                id=event.id, ticker=event.ticker, event_type=event.event_type,
+                price=event.price, quote_time=event.quote_time, created_at=event.created_at,
+                read_at=datetime.now(timezone.utc).isoformat(),
+            ))
 
 
 class SupabaseAccountRepository:
@@ -474,6 +498,50 @@ class SupabaseAccountRepository:
             "order": "event_type.asc",
         })
         return [self._alert_rule(row) for row in rows]
+
+    def list_alert_events(self, user_id: str, unread_only: bool = False) -> List[AlertEvent]:
+        params = {
+            "user_id": f"eq.{user_id}",
+            "select": "id,ticker,event_type,price,quote_time,created_at,read_at",
+            "order": "created_at.desc", "limit": "50",
+        }
+        if unread_only:
+            params["read_at"] = "is.null"
+        rows = self._request("GET", "alert_events", params=params)
+        return [AlertEvent(
+            id=row["id"], ticker=row["ticker"], event_type=row["event_type"],
+            price=float(row["price"]), quote_time=row["quote_time"],
+            created_at=row["created_at"], read_at=row.get("read_at"),
+        ) for row in rows]
+
+    def mark_alert_event_read(self, user_id: str, event_id: str) -> None:
+        self._request(
+            "PATCH", "alert_events",
+            params={"id": f"eq.{event_id}", "user_id": f"eq.{user_id}"},
+            json={"read_at": datetime.now(timezone.utc).isoformat()},
+        )
+
+    def list_enabled_alerts(self) -> List[Dict[str, Any]]:
+        rows = self._request("GET", "price_alerts", params={
+            "monitoring_enabled": "eq.true",
+            "select": (
+                "id,user_id,saved_plan_id,plan_version,event_type,rule_data,armed,"
+                "last_price,last_quote_time,last_triggered_at,saved_plans!inner(ticker)"
+            ),
+        })
+        for row in rows:
+            row["ticker"] = row.get("saved_plans", {}).get("ticker")
+        return rows
+
+    def record_alert_evaluation(
+        self, alert_id: str, price: float, quote_time: str, armed: bool,
+        triggered: bool, idempotency_key: str, event_data: Dict[str, Any],
+    ) -> None:
+        self._request("POST", "rpc/record_alert_evaluation", json={
+            "p_alert_id": alert_id, "p_price": price, "p_quote_time": quote_time,
+            "p_armed": armed, "p_triggered": triggered,
+            "p_idempotency_key": idempotency_key, "p_event_data": event_data,
+        })
 
     @staticmethod
     def _alert_rule(row: Dict[str, Any]) -> AlertRule:

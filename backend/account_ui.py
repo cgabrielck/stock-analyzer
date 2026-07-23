@@ -22,6 +22,7 @@ def render_account_panel(
             return
         st.sidebar.caption(t("account.signed_in_as", lang, username=context.user.username))
         _render_favorites(repository, context.user.id, lang, state)
+        _render_alert_inbox(repository, context.user.id, lang)
         if st.sidebar.button(t("account.save_preferences", lang), key="account_save_preferences", width="stretch"):
             try:
                 repository.save_preferences(
@@ -101,4 +102,23 @@ def _render_favorites(
             if action.button("×", key=f"account_favorite_remove_{symbol}"):
                 repository.remove_favorite(user_id, symbol)
                 state["account_favorites"] = repository.list_favorites(user_id)
+                st.rerun()
+
+
+def _render_alert_inbox(repository: AccountRepository, user_id: str, lang: str) -> None:
+    try:
+        events = repository.list_alert_events(user_id, unread_only=True)
+    except AccountStorageError:
+        return
+    with st.sidebar.expander(t("alerts.inbox", lang, count=len(events)), expanded=bool(events)):
+        if not events:
+            st.caption(t("alerts.inbox_empty", lang))
+        for event in events:
+            st.markdown(t(
+                "alerts.inbox_event", lang, ticker=event.ticker,
+                event=t(f"alerts.{event.event_type}", lang), price=f"{event.price:,.2f}",
+            ))
+            st.caption(event.quote_time)
+            if st.button(t("alerts.mark_read", lang), key=f"alert_read_{event.id}"):
+                repository.mark_alert_event_read(user_id, event.id)
                 st.rerun()

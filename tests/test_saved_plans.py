@@ -96,7 +96,7 @@ def test_plan_diff_reports_only_changed_execution_fields() -> None:
     assert fields == {"entry_low", "entry_high", "confirmation", "stop", "target_1", "target_2"}
 
 
-def test_confirmed_alert_rules_replace_previous_rules_and_remain_disabled() -> None:
+def test_confirmed_alert_rules_replace_previous_rules_and_enable_monitoring() -> None:
     repository = InMemoryAccountRepository()
     user = repository.register("alice", "1")
     plan_data = build_saved_plan("TEST", _result(), "2026-07-23T12:00:00Z", "en")
@@ -108,7 +108,7 @@ def test_confirmed_alert_rules_replace_previous_rules_and_remain_disabled() -> N
     ])
 
     assert {rule.event_type for rule in rules} == {"entry_zone", "stop"}
-    assert all(not rule.monitoring_enabled for rule in rules)
+    assert all(rule.monitoring_enabled for rule in rules)
     repository.replace_alert_rules(user.id, plan.plan_id, plan.version, [])
     assert repository.list_alert_rules(user.id, plan.plan_id) == []
 

@@ -90,7 +90,7 @@ def _render_alert_rules(user_id: str, active, lang: str, repository: AccountRepo
         if rule.plan_version == active.version
     }
     with st.expander(t("alerts.title", lang), expanded=False):
-        st.caption(t("alerts.pending_worker", lang))
+        st.caption(t("alerts.monitoring_note", lang))
         selected = []
         for event_type in allowed:
             if st.checkbox(
@@ -108,7 +108,7 @@ def _render_alert_rules(user_id: str, active, lang: str, repository: AccountRepo
             rules = [(event_type, alert_rule_data(active.plan_data, event_type)) for event_type in selected]
             try:
                 repository.replace_alert_rules(user_id, active.plan_id, active.version, rules)
-                st.success(t("alerts.saved_pending", lang, count=len(rules)))
+                st.success(t("alerts.saved_monitoring", lang, count=len(rules)))
             except AccountStorageError as exc:
                 st.error(t(f"account.storage_{exc.code}", lang))
 

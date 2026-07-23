@@ -12,6 +12,8 @@ ACCOUNT_KEYS = {
     "account.incorrect_pin", "account.username_taken", "account.username_required",
     "account.signed_in_as", "account.not_configured", "account.save_preferences",
     "account.preferences_saved", "favorites.title", "favorites.ticker",
+    "account.storage_migration_required", "account.storage_migration_update_required",
+    "account.storage_permission_denied", "account.storage_database_error",
     "favorites.add", "favorites.empty",
     "saved_plan.title", "saved_plan.login_required", "saved_plan.not_saveable",
     "saved_plan.save", "saved_plan.replace", "saved_plan.confirm_replace", "saved_plan.saved",

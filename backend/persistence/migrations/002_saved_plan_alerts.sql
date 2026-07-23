@@ -39,7 +39,7 @@ begin
 
     insert into public.saved_plans (user_id, ticker)
     values (p_user_id, upper(trim(p_ticker)))
-    on conflict (user_id, ticker) do nothing;
+    on conflict on constraint saved_plans_user_id_ticker_key do nothing;
 
     select id, active_version into v_plan_id, v_version
     from public.saved_plans

@@ -351,7 +351,7 @@ Every push to `main` triggers a Streamlit Cloud redeploy.
 Guest analysis works without account configuration. To enable persistent username/PIN accounts, Favorites, and preferences:
 
 1. Create a Supabase project.
-2. Run `backend/persistence/migrations/001_accounts.sql`, `002_saved_plan_alerts.sql`, then `003_saved_plan_outcomes.sql`, in the Supabase SQL editor.
+2. Run `backend/persistence/migrations/001_accounts.sql`, `002_saved_plan_alerts.sql`, `003_saved_plan_outcomes.sql`, then `004_fix_saved_plan_rpc.sql`, in the Supabase SQL editor.
 3. Add `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` to server-side Streamlit Secrets.
 4. Restart the app.
 

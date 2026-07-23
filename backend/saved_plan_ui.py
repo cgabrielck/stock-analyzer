@@ -5,7 +5,7 @@ import pandas as pd
 import streamlit as st
 import yfinance as yf
 
-from accounts.repository import AccountRepository
+from accounts.repository import AccountRepository, AccountStorageError
 from accounts.session import current_context
 from i18n import t
 from saved_plans import ALERT_EVENT_TYPES, alert_rule_data, build_saved_plan, is_saveable_plan, plan_changes
@@ -36,7 +36,11 @@ def render_saved_plan_controls(
             st.warning(t("saved_plan.not_saveable", lang))
             return
         if st.button(t("saved_plan.save", lang), key=f"saved_plan_save_{ticker}", width="stretch"):
-            repository.save_plan(context.user.id, ticker, plan_data, analysis_timestamp)
+            try:
+                repository.save_plan(context.user.id, ticker, plan_data, analysis_timestamp)
+            except AccountStorageError as exc:
+                st.error(t(f"account.storage_{exc.code}", lang))
+                return
             st.session_state[f"saved_plan_notice_{ticker}"] = t("saved_plan.saved", lang, version=1)
             st.rerun()
         return
@@ -59,7 +63,11 @@ def render_saved_plan_controls(
             t("saved_plan.replace", lang), key=f"saved_plan_replace_{ticker}",
             width="stretch", disabled=not confirmed,
         ):
-            saved = repository.save_plan(context.user.id, ticker, plan_data, analysis_timestamp)
+            try:
+                saved = repository.save_plan(context.user.id, ticker, plan_data, analysis_timestamp)
+            except AccountStorageError as exc:
+                st.error(t(f"account.storage_{exc.code}", lang))
+                return
             st.session_state[f"saved_plan_notice_{ticker}"] = t("saved_plan.saved", lang, version=saved.version)
             st.rerun()
     elif saveable:
@@ -98,8 +106,11 @@ def _render_alert_rules(user_id: str, active, lang: str, repository: AccountRepo
             width="stretch", disabled=not confirmed,
         ):
             rules = [(event_type, alert_rule_data(active.plan_data, event_type)) for event_type in selected]
-            repository.replace_alert_rules(user_id, active.plan_id, active.version, rules)
-            st.success(t("alerts.saved_pending", lang, count=len(rules)))
+            try:
+                repository.replace_alert_rules(user_id, active.plan_id, active.version, rules)
+                st.success(t("alerts.saved_pending", lang, count=len(rules)))
+            except AccountStorageError as exc:
+                st.error(t(f"account.storage_{exc.code}", lang))
 
 
 def _render_history(versions: List[Any], lang: str) -> None:

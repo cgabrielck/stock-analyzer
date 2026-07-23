@@ -64,6 +64,13 @@ class UsernameTakenError(ValueError):
     pass
 
 
+class AccountStorageError(RuntimeError):
+    def __init__(self, code: str, status_code: Optional[int] = None) -> None:
+        super().__init__(code)
+        self.code = code
+        self.status_code = status_code
+
+
 class InMemoryAccountRepository:
     """Test/local repository with the same ownership rules as the production adapter."""
 
@@ -242,9 +249,24 @@ class SupabaseAccountRepository:
 
     def _request(self, method: str, table: str, **kwargs):
         response = self.session.request(method, f"{self.base_url}/{table}", timeout=self.timeout, **kwargs)
-        if response.status_code == 409:
+        if response.status_code == 409 and table == "users":
             raise UsernameTakenError("username_taken")
-        response.raise_for_status()
+        if not response.ok:
+            try:
+                payload = response.json()
+            except ValueError:
+                payload = {}
+            postgres_code = str(payload.get("code") or "")
+            message = str(payload.get("message") or "").lower()
+            if response.status_code == 404 or postgres_code == "PGRST202":
+                code = "migration_required"
+            elif postgres_code == "42702" or "ambiguous" in message:
+                code = "migration_update_required"
+            elif response.status_code in (401, 403):
+                code = "permission_denied"
+            else:
+                code = "database_error"
+            raise AccountStorageError(code, response.status_code) from None
         if not response.content:
             return []
         return response.json()

@@ -3,7 +3,7 @@ from typing import Any, MutableMapping, Optional
 import streamlit as st
 
 from accounts.models import UserPreferences
-from accounts.repository import AccountRepository, UsernameTakenError
+from accounts.repository import AccountRepository, AccountStorageError, UsernameTakenError
 from accounts.session import current_context, logout, set_authenticated
 from i18n import t
 
@@ -23,16 +23,19 @@ def render_account_panel(
         st.sidebar.caption(t("account.signed_in_as", lang, username=context.user.username))
         _render_favorites(repository, context.user.id, lang, state)
         if st.sidebar.button(t("account.save_preferences", lang), key="account_save_preferences", width="stretch"):
-            repository.save_preferences(
-                context.user.id,
-                UserPreferences(
-                    language=state.get("lang", "zh_tw"),
-                    portfolio_capital=int(state.get("picks_account_capital", state.get("portfolio_capital", 100_000))),
-                    risk_budget_pct=float(state.get("picks_risk_budget_pct", 1.0)),
-                    include_ai_news=bool(state.get("picks_news_include_ai", True)),
-                ),
-            )
-            st.sidebar.success(t("account.preferences_saved", lang))
+            try:
+                repository.save_preferences(
+                    context.user.id,
+                    UserPreferences(
+                        language=state.get("lang", "zh_tw"),
+                        portfolio_capital=int(state.get("picks_account_capital", state.get("portfolio_capital", 100_000))),
+                        risk_budget_pct=float(state.get("picks_risk_budget_pct", 1.0)),
+                        include_ai_news=bool(state.get("picks_news_include_ai", True)),
+                    ),
+                )
+                st.sidebar.success(t("account.preferences_saved", lang))
+            except AccountStorageError as exc:
+                st.sidebar.error(t(f"account.storage_{exc.code}", lang))
         if st.sidebar.button(t("account.logout", lang), key="account_logout", width="stretch"):
             logout(state, repository)
             st.rerun()

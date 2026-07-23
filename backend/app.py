@@ -1257,6 +1257,31 @@ def _render_deep_research_result(
         cols[2].metric(t("deep.stance", lang), str(trade.get("stance", "neutral")).upper())
         cols[3].metric(t("deep.action", lang), str(trade.get("action", "watch")).replace("_", " ").upper())
 
+        if avoid.get("reasons"):
+            reason_codes = avoid.get("reason_codes", [])
+            reason_lines = (
+                [t(f"deep.avoid_{code}", lang) for code in reason_codes]
+                if reason_codes else [str(reason) for reason in avoid.get("reasons", [])]
+            )
+            st.warning(
+                "**" + t("deep.avoid_reasons", lang) + "**\n\n" +
+                "\n".join(f"- {reason}" for reason in reason_lines)
+            )
+        decision_basis = trade.get("decision_basis", {})
+        explanation_cols = st.columns(2)
+        with explanation_cols[0]:
+            st.markdown("**" + t("deep.why_stance", lang, stance=str(trade.get("stance", "neutral")).upper()) + "**")
+            st.write(t(
+                f"deep.stance_reason_{trade.get('stance', 'neutral')}", lang,
+                short=decision_basis.get("short_score", short.get("score", 0)),
+                long=decision_basis.get("long_score", long.get("score", 0)),
+                technical=decision_basis.get("technical_score", 0) or 0,
+            ))
+        with explanation_cols[1]:
+            action_key = str(trade.get("action", "watch"))
+            st.markdown("**" + t("deep.why_action", lang, action=action_key.replace("_", " ").upper()) + "**")
+            st.write(t(f"deep.action_reason_{action_key}", lang))
+
         quote_time = technical.get("price_quote_time") or t("deep.unavailable", lang)
         stale = f" · {t('deep.stale', lang)}" if technical.get("price_stale") else ""
         st.caption(
@@ -1296,10 +1321,16 @@ def _render_deep_research_result(
         entry = trade.get("entry_zone", {})
         targets = trade.get("targets", [])
         bearish_plan = trade.get("stance") == "bearish"
-        entry_label = t("deep.short_entry_zone", lang) if bearish_plan else t("deep.entry_zone", lang)
-        confirmation_label = t("deep.bearish_confirmation", lang) if bearish_plan else t("deep.confirmation", lang)
-        stop_label = t("deep.cover_stop", lang) if bearish_plan else t("deep.stop", lang)
-        targets_label = t("deep.downside_targets", lang) if bearish_plan else t("deep.targets", lang)
+        neutral_plan = trade.get("stance") == "neutral"
+        if bearish_plan:
+            entry_label, confirmation_label = t("deep.short_entry_zone", lang), t("deep.bearish_confirmation", lang)
+            stop_label, targets_label = t("deep.cover_stop", lang), t("deep.downside_targets", lang)
+        elif neutral_plan:
+            entry_label, confirmation_label = t("deep.watch_range", lang), t("deep.buy_trigger", lang)
+            stop_label, targets_label = t("deep.invalidation_price", lang), t("deep.potential_targets", lang)
+        else:
+            entry_label, confirmation_label = t("deep.buy_zone", lang), t("deep.buy_trigger", lang)
+            stop_label, targets_label = t("deep.sell_stop", lang), t("deep.take_profit_prices", lang)
         with st.container(key=f"execution_plan_{ticker}"):
             plan_cols = st.columns(4)
             plan_cols[0].metric(entry_label, _price_range(entry.get("low"), entry.get("high")))
@@ -1318,15 +1349,28 @@ def _render_deep_research_result(
                 market=timing.get("market_data", {}).get("duration_ms", 0),
                 llm=timing.get("strategy", {}).get("duration_ms", 0),
             ))
-        entry_reference = entry.get("high") if trade.get("stance") == "bullish" else entry.get("low")
-        risk_per_share = abs(float(entry_reference) - float(trade.get("stop_loss"))) if entry_reference and trade.get("stop_loss") else None
+        entry_reference = trade.get("entry_reference")
+        risk_per_share = trade.get("risk_per_share")
         account_risk = float(st.session_state.get("picks_account_capital", 100000)) * float(st.session_state.get("picks_risk_budget_pct", 1.0)) / 100
         shares = int(account_risk / risk_per_share) if risk_per_share else 0
         context_cols = st.columns(4)
         context_cols[0].metric(t("deep.horizon", lang), short.get("horizon", "N/A"))
-        context_cols[1].metric(t("deep.risk_reward", lang), "1.5R / 2.5R")
+        rr_text = " / ".join(
+            f"{multiple:g}R: {_currency(target)}"
+            for multiple, target in zip(trade.get("risk_reward", []), targets)
+        ) or "N/A"
+        context_cols[1].metric(t("deep.risk_reward", lang), rr_text)
         context_cols[2].metric(t("deep.risk_per_share", lang), _currency(risk_per_share))
         context_cols[3].metric(t("deep.max_shares", lang), str(shares) if shares else "N/A")
+        if risk_per_share and entry_reference and targets:
+            st.caption(t(
+                "deep.rr_exact", lang,
+                stop=_currency(trade.get("stop_loss")),
+                entry=_currency(entry_reference),
+                risk=_currency(risk_per_share),
+                target1=_currency(targets[0]),
+                target2=_currency(targets[1]) if len(targets) > 1 else "N/A",
+            ))
 
         section = st.segmented_control(
             t("deep.detail_section", lang),
@@ -1457,12 +1501,10 @@ def _render_deep_research_result(
             tech_cols[1].metric("EMA 9 / 21", _pair(technical.get("ema_9"), technical.get("ema_21")))
             tech_cols[2].metric("ADX 14", _number(technical.get("adx_14")))
             tech_cols[3].metric("ATR 14", _number(technical.get("atr_14")))
-            if avoid.get("reasons"):
-                st.markdown("**" + t("deep.avoid_reasons", lang) + "**")
-                for reason in avoid["reasons"]:
-                    st.markdown(f"- {reason}")
         elif strategy.get("error"):
-            st.warning(t("deep.llm_unavailable", lang))
+            error_code = strategy.get("error_code", "provider_error")
+            st.warning(t(f"deep.llm_unavailable_{error_code}", lang))
+            st.caption(t("deep.llm_quant_still_valid", lang))
         else:
             explanation = strategy.get("decision_explanation", {})
             if explanation:

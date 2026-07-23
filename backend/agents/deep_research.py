@@ -291,19 +291,25 @@ def _avoid_assessment(
     stock: Dict[str, Any], technical: Dict[str, Any], short_score: float, long_score: float,
 ) -> Dict[str, Any]:
     reasons = []
+    reason_codes = []
     price = technical.get("price") or 0
     sma50, sma200 = technical.get("sma_50"), technical.get("sma_200")
     if short_score < 45 and long_score < 50:
         reasons.append("Weak short- and long-horizon scores")
+        reason_codes.append("weak_scores")
     if sma50 and sma200 and price < sma50 < sma200:
         reasons.append("Price is below both SMA50 and SMA200")
+        reason_codes.append("below_long_trend")
     if stock.get("risk_penalty_level") == "high":
         reasons.append("High volatility or drawdown risk")
+        reason_codes.append("high_risk")
     if stock.get("metrics_used", 0) < 4:
         reasons.append("Insufficient fundamental coverage")
+        reason_codes.append("insufficient_fundamentals")
     return {
         "active": bool(reasons),
         "reasons": reasons,
+        "reason_codes": reason_codes,
         "review": "Review after 5 trading days or a material signal change",
         "invalidation": "Avoid status clears when risk and trend conditions recover",
     }
@@ -374,6 +380,7 @@ def _build_trade_plan(
         targets = [price + 1.5 * atr, price + 2.5 * atr]
         confirmation = price + atr
         execution = "No immediate entry; reassess during regular-session liquidity"
+    entry_reference = entry_high if stance == "bullish" else entry_low if stance == "bearish" else price
     return {
         "stance": stance,
         "action": action,
@@ -386,8 +393,33 @@ def _build_trade_plan(
         "stop_loss": round(stop, 2),
         "targets": [round(value, 2) for value in targets],
         "risk_reward": [1.5, 2.5],
+        "entry_reference": round(entry_reference, 2),
+        "risk_per_share": round(risk, 2),
         "atr_14": round(atr, 2),
         "method": "Deterministic ATR and observed support/resistance levels",
+        "decision_basis": _decision_basis(
+            stance, action, short_score, long_score, avoid, technical,
+        ),
+    }
+
+
+def _decision_basis(
+    stance: str,
+    action: str,
+    short_score: float,
+    long_score: float,
+    avoid: Dict[str, Any],
+    technical: Dict[str, Any],
+) -> Dict[str, Any]:
+    return {
+        "stance": stance,
+        "action": action,
+        "short_score": short_score,
+        "long_score": long_score,
+        "technical_score": technical.get("technical_score"),
+        "risk_level": technical.get("risk_metrics", {}).get("risk_level", "unknown"),
+        "avoid_active": bool(avoid.get("active")),
+        "avoid_reason_codes": avoid.get("reason_codes", []),
     }
 
 

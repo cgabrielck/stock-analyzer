@@ -98,6 +98,7 @@ def test_bullish_trade_plan_has_ordered_levels() -> None:
     assert plan["stop_type"] == "sell_stop"
     assert plan["stop_loss"] < plan["entry_zone"]["low"] < plan["entry_zone"]["high"]
     assert plan["targets"][0] > plan["entry_zone"]["high"]
+    assert plan["targets"][0] == round(plan["entry_reference"] + 1.5 * plan["risk_per_share"], 2)
 
 
 def test_bearish_trade_plan_has_ordered_levels() -> None:
@@ -110,6 +111,7 @@ def test_bearish_trade_plan_has_ordered_levels() -> None:
     assert plan["stop_type"] == "buy_to_cover_stop"
     assert plan["stop_loss"] > plan["entry_zone"]["high"]
     assert plan["targets"][0] < plan["entry_zone"]["low"]
+    assert plan["targets"][0] == round(plan["entry_reference"] - 1.5 * plan["risk_per_share"], 2)
 
 
 def test_bearish_plan_never_presents_cover_stop_as_long_stop_for_reported_tickers() -> None:

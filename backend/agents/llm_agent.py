@@ -290,7 +290,7 @@ def suggest_price_targets(
 ) -> Dict[str, Any]:
     client = _get_client()
     if client is None:
-        return {"error": "LLM not configured"}
+        return {"error": "LLM not configured", "error_code": "not_configured"}
 
     data_block = _build_tech_data_block(ticker, technical_data, current_price)
     data_block += _build_news_block(news_data)
@@ -496,7 +496,18 @@ def suggest_trading_strategy(
         }
     except Exception as e:
         agent_state.log_source_result(f"llm_strategy:{ticker}", False, str(e))
-        return {"error": str(e)}
+        return {"error": str(e), "error_code": _classify_strategy_error(e)}
+
+
+def _classify_strategy_error(error: Any) -> str:
+    message = str(error).lower()
+    if "timed out" in message or "timeout" in message:
+        return "timeout"
+    if "401" in message or "unauthorized" in message or "authentication" in message:
+        return "authentication"
+    if "429" in message or "rate limit" in message:
+        return "rate_limit"
+    return "provider_error"
 
 
 def _normalize_decision_explanation(

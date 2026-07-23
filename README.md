@@ -308,7 +308,7 @@ Alpha Vantage is optional. When configured, it supplies company overview, income
 Current verified result:
 
 ```text
-145 passed
+146 passed
 ```
 
 Additional checks:

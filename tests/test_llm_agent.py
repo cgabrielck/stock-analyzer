@@ -7,6 +7,7 @@ from agents import llm_agent
 from agents.llm_agent import (
     _normalize_decision_explanation,
     _normalize_news_impact,
+    _classify_strategy_error,
     get_model_for_task,
     get_public_config,
 )
@@ -80,3 +81,13 @@ def test_decision_explanation_cannot_override_authoritative_bullish_context() ->
     )
 
     assert result["label"] == "bullish"
+
+
+def test_strategy_error_code_classification() -> None:
+    # Keep provider diagnostics stable for the Deep Analysis fallback message.
+    for message, expected in (
+        ("request timeout", "timeout"),
+        ("401 Unauthorized", "authentication"),
+        ("429 rate limit", "rate_limit"),
+    ):
+        assert _classify_strategy_error(RuntimeError(message)) == expected

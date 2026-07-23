@@ -125,6 +125,11 @@ def _inject_apple_css() -> None:
         font-size:1rem !important; letter-spacing:-.02em;
     }
     [class*="st-key-execution_plan_"] [data-testid="stMetricDelta"] { display:none; }
+    [class*="st-key-risk_context_"] [data-testid="stMetricValue"] {
+        color:var(--text) !important; font-variant-numeric:tabular-nums;
+        font-size:.96rem !important; line-height:1.25; white-space:normal;
+        overflow-wrap:anywhere;
+    }
     div[data-testid="stMetricDelta"] { font-family:var(--mono); font-size:.66rem; }
 
     .stExpander { background:var(--panel); border:1px solid var(--line) !important; border-radius:8px !important; margin-bottom:.55rem; overflow:hidden; }
@@ -1353,15 +1358,13 @@ def _render_deep_research_result(
         risk_per_share = trade.get("risk_per_share")
         account_risk = float(st.session_state.get("picks_account_capital", 100000)) * float(st.session_state.get("picks_risk_budget_pct", 1.0)) / 100
         shares = int(account_risk / risk_per_share) if risk_per_share else 0
-        context_cols = st.columns(4)
-        context_cols[0].metric(t("deep.horizon", lang), short.get("horizon", "N/A"))
-        rr_text = " / ".join(
-            f"{multiple:g}R: {_currency(target)}"
-            for multiple, target in zip(trade.get("risk_reward", []), targets)
-        ) or "N/A"
-        context_cols[1].metric(t("deep.risk_reward", lang), rr_text)
-        context_cols[2].metric(t("deep.risk_per_share", lang), _currency(risk_per_share))
-        context_cols[3].metric(t("deep.max_shares", lang), str(shares) if shares else "N/A")
+        with st.container(key=f"risk_context_{ticker}"):
+            context_cols = st.columns(4)
+            context_cols[0].metric(t("deep.horizon", lang), short.get("horizon", "N/A"))
+            rr_targets = " / ".join(_currency(target) for target in targets[:2]) or "N/A"
+            context_cols[1].metric(t("deep.risk_reward_targets", lang), rr_targets)
+            context_cols[2].metric(t("deep.risk_per_share", lang), _currency(risk_per_share))
+            context_cols[3].metric(t("deep.max_shares", lang), str(shares) if shares else "N/A")
         if risk_per_share and entry_reference and targets:
             st.caption(t(
                 "deep.rr_exact", lang,

@@ -227,6 +227,7 @@ def init_state() -> None:
         "picks_selection_widget": [],
         "picks_analyzed_tickers": [],
         "picks_successful_tickers": [],
+        "picks_recent_successful_tickers": [],
         "picks_analyzed_at": None,
         "picks_run_error": None,
         "picks_news_selection_widget": [],
@@ -237,6 +238,8 @@ def init_state() -> None:
         "deep_workspace": "research",
         "scan_view": "overview",
         "scan_filter_tickers": [],
+        "backtest_import_signature": None,
+        "backtest_ticker_widget": [],
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -1967,17 +1970,40 @@ def _clear_picks_selection() -> None:
     st.session_state["picks_errors"] = {}
     st.session_state["picks_analyzed_tickers"] = []
     st.session_state["picks_successful_tickers"] = []
+    st.session_state["picks_recent_successful_tickers"] = []
     st.session_state["picks_analyzed_at"] = None
     st.session_state["picks_run_error"] = None
 
 
 def _remember_successful_picks(selected: List[str], results: Dict[str, Dict[str, Any]]) -> List[str]:
     successful = [ticker for ticker in selected if ticker in results and not results[ticker].get("error")]
+    st.session_state.picks_successful_tickers = successful
     if successful:
-        remembered = st.session_state.get("picks_successful_tickers", [])
-        st.session_state.picks_successful_tickers = list(dict.fromkeys([*remembered, *successful]))[-5:]
-        st.session_state.picks_news_selection_widget = list(st.session_state.picks_successful_tickers)
+        remembered = st.session_state.get("picks_recent_successful_tickers", [])
+        recent = list(dict.fromkeys([*remembered, *successful]))[-5:]
+        st.session_state.picks_recent_successful_tickers = recent
+        st.session_state.picks_news_selection_widget = list(recent)
     return successful
+
+
+def _current_backtest_tickers() -> List[str]:
+    analyzed = st.session_state.get("picks_analyzed_tickers") or []
+    selected = st.session_state.get("picks_selection_widget") or []
+    return list(dict.fromkeys(analyzed or selected))
+
+
+def _backtest_request_signature(
+    tickers: List[str], start: str, end: str, use_fundamentals: bool,
+    weighting: str, transaction_cost_bps: float,
+) -> Dict[str, Any]:
+    return {
+        "tickers": sorted(set(tickers)),
+        "start": start,
+        "end": end,
+        "use_fundamentals": bool(use_fundamentals),
+        "weighting": weighting,
+        "transaction_cost_bps": float(transaction_cost_bps),
+    }
 
 
 def render_our_picks_page(lang: str, force_refresh: bool = False) -> None:
@@ -2067,7 +2093,8 @@ def render_our_picks_page(lang: str, force_refresh: bool = False) -> None:
 
 def _import_picks_to_news() -> None:
     tickers = (
-        st.session_state.get("picks_successful_tickers")
+        st.session_state.get("picks_recent_successful_tickers")
+        or st.session_state.get("picks_successful_tickers")
         or st.session_state.get("picks_analyzed_tickers")
         or st.session_state.get("picks_selection_widget")
         or []
@@ -2081,7 +2108,8 @@ def render_picks_news_page(lang: str, force_refresh: bool = False) -> None:
     stock_by_ticker = {stock["ticker"]: stock for stock in STOCK_UNIVERSE}
     if not st.session_state.get("picks_news_selection_widget"):
         remembered = (
-            st.session_state.get("picks_successful_tickers")
+            st.session_state.get("picks_recent_successful_tickers")
+            or st.session_state.get("picks_successful_tickers")
             or st.session_state.get("picks_analyzed_tickers")
             or st.session_state.get("picks_selection_widget")
             or []
@@ -2147,8 +2175,7 @@ def render_deep_workspace(lang: str, force_refresh: bool = False) -> None:
     elif workspace == "news":
         render_picks_news_page(lang, force_refresh=force_refresh)
     elif workspace == "backtest":
-        tickers = st.session_state.get("picks_successful_tickers") or st.session_state.get("picks_selection_widget") or None
-        render_backtest_tab(tickers)
+        render_backtest_tab(_current_backtest_tickers())
     else:
         render_portfolio_tab()
 
@@ -2278,9 +2305,29 @@ def render_backtest_tab(selected_tickers: Optional[List[str]] = None) -> None:
     st.subheader(t("backtest.title", lang))
     st.caption(t("backtest.desc", lang))
 
+    imported_tickers = list(dict.fromkeys(selected_tickers or []))
+    import_signature = tuple(imported_tickers)
+    if st.session_state.get("backtest_import_signature") != import_signature:
+        st.session_state.backtest_import_signature = import_signature
+        st.session_state.backtest_ticker_widget = imported_tickers
+    universe_tickers = [stock["ticker"] for stock in STOCK_UNIVERSE]
+    ticker_options = list(dict.fromkeys([*imported_tickers, *universe_tickers]))
+    active_tickers = st.multiselect(
+        t("backtest.selected_tickers", lang), ticker_options,
+        key="backtest_ticker_widget",
+        placeholder=t("backtest.selected_tickers_placeholder", lang),
+    )
+    if active_tickers:
+        st.info(t("backtest.selected_tickers_summary", lang, tickers=", ".join(active_tickers)))
+    else:
+        st.warning(t("backtest.no_selected_tickers", lang))
+
     col1, col2, col3, col4 = st.columns([2, 1.2, 1.5, 1])
     with col1:
-        use_fund = st.checkbox(t("backtest.use_fundamentals", lang), value=True)
+        use_fund = st.checkbox(
+            t("backtest.use_fundamentals", lang), value=False,
+            help=t("backtest.fundamentals_help", lang), key="backtest_use_fundamentals",
+        )
     with col2:
         years = st.selectbox(t("backtest.years", lang), [3, 5], index=1)
     with col3:
@@ -2291,12 +2338,16 @@ def render_backtest_tab(selected_tickers: Optional[List[str]] = None) -> None:
         weighting = "equal" if weighting_label == t("backtest.equal", lang) else "calibrated_kelly"
     with col4:
         cost_bps = st.number_input(t("backtest.cost_bps", lang), min_value=0.0, max_value=100.0, value=15.0, step=1.0)
-        run = st.button(t("backtest.run", lang), type="primary", width="stretch")
+        run = st.button(t("backtest.run", lang), type="primary", width="stretch", disabled=not active_tickers)
+
+    import datetime as dt
+    end_str = dt.datetime.now().strftime("%Y-%m-%d")
+    start_str = str(dt.datetime.now().year - years) + "-01-01"
+    request_signature = _backtest_request_signature(
+        active_tickers, start_str, end_str, use_fund, weighting, cost_bps,
+    )
 
     if run:
-        import datetime as dt
-        end_str = dt.datetime.now().strftime("%Y-%m-%d")
-        start_str = str(dt.datetime.now().year - years) + "-01-01"
         status = st.status(t("backtest.running", lang), expanded=True)
 
         def progress(i: int, n: int, msg: str = ""):
@@ -2312,12 +2363,13 @@ def render_backtest_tab(selected_tickers: Optional[List[str]] = None) -> None:
             end=end_str,
             use_fundamentals=use_fund,
             progress_callback=progress,
-            selected_tickers=selected_tickers,
+            selected_tickers=active_tickers,
             weighting=weighting,
             transaction_cost_bps=cost_bps,
             persist_calibration=True,
         )
         summary = format_backtest_summary(result)
+        summary["request"] = request_signature
 
         st.session_state.backtest_summary = summary
         status.update(label=t("backtest.complete", lang), state="complete", expanded=False)
@@ -2325,6 +2377,9 @@ def render_backtest_tab(selected_tickers: Optional[List[str]] = None) -> None:
     summary = st.session_state.get("backtest_summary")
     if not summary:
         st.info(t("backtest.no_data", lang))
+        return
+    if summary.get("request") != request_signature:
+        st.info(t("backtest.inputs_changed", lang))
         return
 
     for warning in summary.get("warnings", []):
@@ -2363,7 +2418,11 @@ def render_backtest_tab(selected_tickers: Optional[List[str]] = None) -> None:
                 upper=alpha_ci.get("upper", 0),
             ))
         if evidence.get("reason_codes"):
-            st.warning(t("backtest.grade_limited", lang, reasons=", ".join(evidence["reason_codes"])))
+            translated_reasons = [
+                t(f"backtest.reason.{reason}", lang)
+                for reason in evidence["reason_codes"]
+            ]
+            st.warning(t("backtest.grade_limited", lang, reasons="；".join(translated_reasons)))
         sensitivity = summary.get("cost_sensitivity", [])
         if sensitivity:
             with st.expander(t("backtest.cost_sensitivity", lang)):

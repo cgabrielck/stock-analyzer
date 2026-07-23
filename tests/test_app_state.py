@@ -33,6 +33,7 @@ def test_clear_picks_callback_clears_selection_and_results() -> None:
     app.session_state["picks_results"] = {"AAPL": {"ticker": "AAPL"}}
     app.session_state["picks_analyzed_tickers"] = ["AAPL"]
     app.session_state["picks_successful_tickers"] = ["AAPL"]
+    app.session_state["picks_recent_successful_tickers"] = ["AAPL"]
     app.run()
 
     clear_button = next(button for button in app.button if button.key == "picks_clear")
@@ -42,6 +43,7 @@ def test_clear_picks_callback_clears_selection_and_results() -> None:
     assert app.session_state["picks_results"] == {}
     assert app.session_state["picks_analyzed_tickers"] == []
     assert app.session_state["picks_successful_tickers"] == []
+    assert app.session_state["picks_recent_successful_tickers"] == []
 
 
 def test_legacy_news_and_portfolio_routes_open_deep_workspaces() -> None:
@@ -66,6 +68,7 @@ def test_home_has_three_tour_actions() -> None:
 
 def test_successful_deep_results_are_remembered_for_news() -> None:
     stock_app.st.session_state["picks_successful_tickers"] = ["MSFT"]
+    stock_app.st.session_state["picks_recent_successful_tickers"] = ["MSFT"]
     stock_app.st.session_state["picks_news_selection_widget"] = []
 
     successful = stock_app._remember_successful_picks(
@@ -74,8 +77,24 @@ def test_successful_deep_results_are_remembered_for_news() -> None:
     )
 
     assert successful == ["AAPL"]
-    assert stock_app.st.session_state["picks_successful_tickers"] == ["MSFT", "AAPL"]
+    assert stock_app.st.session_state["picks_successful_tickers"] == ["AAPL"]
+    assert stock_app.st.session_state["picks_recent_successful_tickers"] == ["MSFT", "AAPL"]
     assert stock_app.st.session_state["picks_news_selection_widget"] == ["MSFT", "AAPL"]
+
+
+def test_backtest_scope_uses_latest_analyzed_tickers_not_old_success_memory() -> None:
+    stock_app.st.session_state["picks_analyzed_tickers"] = ["TSLA", "MU"]
+    stock_app.st.session_state["picks_selection_widget"] = ["ASTS"]
+    stock_app.st.session_state["picks_successful_tickers"] = ["MSFT"]
+
+    assert stock_app._current_backtest_tickers() == ["TSLA", "MU"]
+
+
+def test_backtest_request_signature_changes_with_ticker_scope() -> None:
+    first = stock_app._backtest_request_signature(["AAPL"], "2023-01-01", "2026-01-01", False, "equal", 15)
+    second = stock_app._backtest_request_signature(["NVDA"], "2023-01-01", "2026-01-01", False, "equal", 15)
+
+    assert first != second
 
 
 def test_tech_chart_builds_from_normalized_data_without_quote_lookup(monkeypatch) -> None:

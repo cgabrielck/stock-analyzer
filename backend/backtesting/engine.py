@@ -378,6 +378,8 @@ class BacktestResult:
         self.statistics: Dict[str, Any] = {}
         self.evidence_grade: Dict[str, Any] = {}
         self.cost_sensitivity: List[Dict[str, Any]] = []
+        self.backtest_scope: str = "historical_universe"
+        self.requested_tickers: List[str] = []
 
     @property
     def num_periods(self) -> int:
@@ -404,6 +406,8 @@ def run_backtest(
     end_date = end or datetime.now().strftime("%Y-%m-%d")
     result = BacktestResult()
     result.model_scope = "fundamental_technical" if use_fundamentals else "technical_only"
+    result.requested_tickers = sorted(set(selected_tickers or []))
+    result.backtest_scope = "selected_tickers" if result.requested_tickers else "historical_universe"
     universe = HistoricalUniverse(selected_tickers=selected_tickers)
     tickers = universe.all_tickers()
     all_tickers = tickers + ["SPY", "^VIX"]
@@ -770,8 +774,12 @@ def run_backtest(
         })
     if universe.uses_current_universe_fallback:
         result.warnings.append({
-            "code": "survivorship_bias",
-            "message": "Historical universe snapshots are unavailable; results use today's stock universe and may contain survivorship bias.",
+            "code": "selected_ticker_bias" if result.backtest_scope == "selected_tickers" else "survivorship_bias",
+            "message": (
+                "Selected tickers are tested retrospectively without verified historical constituent membership."
+                if result.backtest_scope == "selected_tickers"
+                else "Historical universe snapshots are unavailable; results use today's stock universe and may contain survivorship bias."
+            ),
         })
     elif universe_coverage["coverage_pct"] < 100:
         result.warnings.append({
@@ -963,7 +971,10 @@ def _attach_statistical_evidence(result: BacktestResult) -> None:
     positive_alpha = alpha_ci.get("lower") is not None and alpha_ci["lower"] > 0
     positive_return = return_ci.get("lower") is not None and return_ci["lower"] > 0
     reasons = []
-    if universe_coverage < 100:
+    if result.backtest_scope == "selected_tickers":
+        reasons.append("ticker_specific_selection_bias")
+        reasons.append("historical_membership_unverified")
+    elif universe_coverage < 100:
         reasons.append("historical_universe_incomplete")
     if result.model_scope != "fundamental_technical":
         reasons.append("model_scope_not_full")
@@ -975,7 +986,7 @@ def _attach_statistical_evidence(result: BacktestResult) -> None:
     elif reasons or not positive_alpha:
         level = "low"
         if not positive_alpha:
-            reasons.append("alpha_interval_crosses_zero")
+            reasons.append(_alpha_interval_reason(alpha_ci))
     elif n_eff >= 24 and positive_return:
         level = "high"
     else:
@@ -986,6 +997,17 @@ def _attach_statistical_evidence(result: BacktestResult) -> None:
         "raw_periods": len(aligned),
         "reason_codes": reasons,
     }
+
+
+def _alpha_interval_reason(interval: Dict[str, Any]) -> str:
+    if not interval.get("available") or interval.get("lower") is None or interval.get("upper") is None:
+        return "alpha_interval_unavailable"
+    lower, upper = float(interval["lower"]), float(interval["upper"])
+    if upper < 0:
+        return "alpha_interval_below_zero"
+    if lower <= 0 <= upper:
+        return "alpha_interval_includes_zero"
+    return "alpha_interval_not_positive"
 
 
 def format_backtest_summary(result: BacktestResult) -> Dict[str, Any]:
@@ -1009,6 +1031,8 @@ def format_backtest_summary(result: BacktestResult) -> Dict[str, Any]:
         "warnings": result.warnings,
         "calibration": result.calibration,
         "model_scope": result.model_scope,
+        "backtest_scope": result.backtest_scope,
+        "requested_tickers": result.requested_tickers,
         "statistics": result.statistics,
         "historical_evidence_grade": result.evidence_grade,
         "cost_sensitivity": result.cost_sensitivity,

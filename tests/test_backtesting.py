@@ -10,6 +10,7 @@ from backtesting.engine import (
     _calculate_turnover,
     _close_on_date,
     _compute_aggregate_metrics,
+    _alpha_interval_reason,
     _extract_fundamentals_as_of,
     _target_weights,
 )
@@ -134,3 +135,9 @@ def test_close_on_date_requires_an_exact_common_session() -> None:
 
     assert _close_on_date(prices, "2026-01-05") == 101.0
     assert _close_on_date(prices, "2026-01-03") is None
+
+
+def test_alpha_interval_reasons_distinguish_negative_zero_and_unavailable() -> None:
+    assert _alpha_interval_reason({"available": True, "lower": -5, "upper": -1}) == "alpha_interval_below_zero"
+    assert _alpha_interval_reason({"available": True, "lower": -1, "upper": 2}) == "alpha_interval_includes_zero"
+    assert _alpha_interval_reason({"available": False}) == "alpha_interval_unavailable"

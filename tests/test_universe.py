@@ -52,3 +52,13 @@ def test_malformed_historical_universe_is_explicit_fallback(tmp_path) -> None:
     assert universe.uses_current_universe_fallback is True
     assert universe.status()["state"] == "fallback_malformed"
     assert universe.status()["available"] is False
+
+
+def test_explicit_selected_ticker_is_not_dropped_by_broad_universe_snapshots(tmp_path) -> None:
+    path = tmp_path / "universe.json"
+    path.write_text(json.dumps({"snapshots": {"2020-01-01": ["A", "B"]}}))
+    universe = HistoricalUniverse(path=path, selected_tickers=["CUSTOM"])
+
+    assert universe.all_tickers() == ["CUSTOM"]
+    assert universe.tickers_for(date(2024, 1, 1)) == ["CUSTOM"]
+    assert universe.status()["scope"] == "selected_tickers"

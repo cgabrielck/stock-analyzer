@@ -21,22 +21,22 @@ class HistoricalUniverse:
         self.uses_current_universe_fallback = not bool(self.snapshots)
 
     def tickers_for(self, as_of: date) -> List[str]:
-        if self.snapshots:
+        if self.selected_tickers:
+            tickers = list(self.selected_tickers)
+        elif self.snapshots:
             available = [key for key in self.snapshots if key <= as_of.isoformat()]
             tickers = self.snapshots[max(available)] if available else []
         else:
-            tickers = list(self.selected_tickers) if self.selected_tickers else [stock["ticker"] for stock in STOCK_UNIVERSE]
-        if self.selected_tickers:
-            tickers = [ticker for ticker in tickers if ticker in self.selected_tickers]
+            tickers = [stock["ticker"] for stock in STOCK_UNIVERSE]
         return sorted(tickers)
 
     def all_tickers(self) -> List[str]:
-        if self.snapshots:
+        if self.selected_tickers:
+            tickers = set(self.selected_tickers)
+        elif self.snapshots:
             tickers = {ticker for values in self.snapshots.values() for ticker in values}
         else:
-            tickers = self.selected_tickers or {stock["ticker"] for stock in STOCK_UNIVERSE}
-        if self.selected_tickers:
-            tickers &= self.selected_tickers
+            tickers = {stock["ticker"] for stock in STOCK_UNIVERSE}
         return sorted(tickers)
 
     def status(self) -> Dict[str, Any]:
@@ -50,6 +50,7 @@ class HistoricalUniverse:
             "first_snapshot": dates[0] if dates else None,
             "last_snapshot": dates[-1] if dates else None,
             "validation_errors": list(self.validation_errors),
+            "scope": "selected_tickers" if self.selected_tickers else "historical_universe",
         }
 
     def coverage_for(self, dates: Iterable[Union[date, datetime, str]]) -> Dict[str, Any]:

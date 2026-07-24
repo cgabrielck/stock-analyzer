@@ -1,16 +1,25 @@
-# ALPHA//DESK — AI Stock Analyzer
+# ALPHA//DESK — Institutional-Grade Equity Research Terminal
 
 [![Live App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://stock-analyzergit-ijue4vuwb7kuvizn62fema.streamlit.app/)
 [![Python](https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white)](https://python.org)
-[![Tests](https://img.shields.io/badge/tests-pytest-22d3c5)](#testing--測試)
+[![Tests](https://img.shields.io/badge/tests-191_passing-22d3c5)](#testing--測試)
+[![Last commit](https://img.shields.io/github/last-commit/cgabrielck/stock-analyzer)](https://github.com/cgabrielck/stock-analyzer/commits/main)
 
-> A risk-aware US equity research terminal combining fundamental quality, technical signals, active-session prices, market-regime controls, walk-forward backtesting, portfolio sizing, and optional LLM analysis.
+> A risk-aware US equity research terminal combining fundamental quality, technical signals, active-session prices, market-regime controls, walk-forward backtesting, portfolio sizing, and optional LLM analysis. Designed for individual researchers who want institutional-grade tooling without a Bloomberg terminal bill.
 >
-> 風險調整型美股研究終端，整合基本面、技術訊號、即時交易時段價格、市場狀態、walk-forward 回測、倉位管理與選用的 LLM 分析。
+> 風險調整型美股研究終端，整合基本面、技術訊號、即時交易時段價格、市場狀態、walk-forward 回測、倉位管理與選用的 LLM 分析。專為個人研究者打造的機構級工具。
 
 **Live application / 線上版本:** [stock-analyzergit-ijue4vuwb7kuvizn62fema.streamlit.app](https://stock-analyzergit-ijue4vuwb7kuvizn62fema.streamlit.app/)
 
 Quality grades, architecture decisions, and the phased enhancement plan are tracked in [docs/QUALITY_ROADMAP.md](docs/QUALITY_ROADMAP.md).
+
+## What's New / 近期更新
+
+- **Chart redesigned** — Clean simple/detail mode. Default view focuses on ~90 recent daily candles with natural scroll, pinch-zoom, and drag panning. No cluttered toolbar — just the price, volume, trend line, entry zone, stop, and target 1. Toggle detail mode for SMA/EMA, Bollinger Bands, RSI, MACD, Fibonacci, and Double Top/Bottom patterns with plain-language indicator explanations.
+- **Chart pattern overlays** — Double Top / Double Bottom detection with look-ahead bias prevention, Fibonacci retracement levels, and TradingView Pine Script v6 export for independent verification.
+- **Price alert monitoring** — Directional crossing state machine with confirmation bars, re-arm logic (0.5% away from level), stale quote rejection, and duplicate-safe events. Standalone background worker (default 60s interval) checks alerts when the browser is closed.
+- **Saved Plan versioning** — Immutable Deep Research versions with version history browsing, replacement with explicit invalidation of old alert rules, and on-demand outcome evaluation at 5/20/60 sessions.
+- **Full regression suite** — 191 passing tests covering backtesting, portfolio, alerts, patterns, charts, i18n, and database operations.
 
 ## What It Does / 系統功能
 
@@ -310,7 +319,7 @@ Alpha Vantage is optional. When configured, it supplies company overview, income
 Current verified result:
 
 ```text
-179 passed
+191 passed
 ```
 
 Additional checks:

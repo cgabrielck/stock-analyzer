@@ -369,7 +369,7 @@ Price alert rules are monitored outside Streamlit so checks continue after the b
 python backend/alert_worker.py
 ```
 
-The default interval is five minutes. Set `ALERT_INTERVAL_SECONDS` to change it. The worker rejects stale Yahoo quotes, triggers only on directional crossings or entry-zone transitions, re-arms after price moves away from the level, and stores duplicate-safe events in the signed-in user's in-app alert inbox. This is periodic/delayed monitoring, not exchange-grade real-time market data.
+The default interval is one minute. Set `ALERT_INTERVAL_SECONDS` to change it. The worker rejects stale Yahoo quotes, triggers only on directional crossings or entry-zone transitions, re-arms after price moves away from the level, and stores duplicate-safe events in the signed-in user's in-app alert inbox. This is periodic/delayed monitoring, not exchange-grade real-time market data.
 
 Deep Research also includes bounded SEC filing evidence with direct EDGAR citations. Saved-plan outcome journals can be evaluated on demand at 5, 20, and 60 completed trading sessions using raw daily OHLC and exact-date SPY comparison. Outcome observations are educational research records, not brokerage fills. The model portfolio reports cash-aware covariance volatility, historical VaR, coverage, and transparent -10%/-20% equity stress scenarios.
 

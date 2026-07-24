@@ -45,7 +45,7 @@ def check_alerts(repository: SupabaseAccountRepository) -> Dict[str, int]:
     return result
 
 
-def run_forever(interval_seconds: int = 300) -> None:
+def run_forever(interval_seconds: int = 60) -> None:
     settings = get_account_settings()
     if not settings.configured:
         raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required")
@@ -73,4 +73,4 @@ def _iso_quote_time(value: Any) -> str:
 
 if __name__ == "__main__":
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
-    run_forever(int(os.getenv("ALERT_INTERVAL_SECONDS", "300")))
+    run_forever(int(os.getenv("ALERT_INTERVAL_SECONDS", "60")))

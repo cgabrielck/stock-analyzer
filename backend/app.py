@@ -562,6 +562,7 @@ def _build_tech_chart(
     interval: str = "1d",
     extended_hours: bool = False,
     current_price: Optional[float] = None,
+    trade_plan: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     from plotly.subplots import make_subplots
     import plotly.graph_objects as go
@@ -618,6 +619,7 @@ def _build_tech_chart(
             fig.add_trace(go.Bar(x=df.index, y=df["MACD_hist"], marker_color=macd_colors, opacity=0.55, name="MACD Hist"), row=4, col=1)
             fig.add_trace(go.Scatter(x=df.index, y=df["MACD"], line=dict(color="#60a5fa", width=1), name="MACD"), row=4, col=1)
             fig.add_trace(go.Scatter(x=df.index, y=df["MACD_signal"], line=dict(color="#fbbf24", width=1), name="Signal"), row=4, col=1)
+            _add_pattern_layers(fig, df, trade_plan)
 
         fig.update_layout(
             height=560 if is_intraday else 760, template="plotly_dark", paper_bgcolor="#0d1420",
@@ -638,7 +640,54 @@ def _build_tech_chart(
         return {**result, "error": f"{type(exc).__name__}: {exc}", "stage": "render"}
 
 
-def _render_kline_chart(ticker: str, lang: str, key_prefix: str, current_price: Optional[float] = None) -> None:
+def _add_pattern_layers(fig: Any, df: pd.DataFrame, trade_plan: Optional[Dict[str, Any]]) -> None:
+    from agents.pattern_analyzer import analyze_patterns
+    import plotly.graph_objects as go
+
+    atr = float((df["High"] - df["Low"]).tail(14).mean()) if len(df) >= 14 else None
+    analysis = analyze_patterns(df, atr=atr)
+    fib = analysis.get("fibonacci")
+    if fib:
+        for ratio, level in fib["levels"].items():
+            fig.add_hline(
+                y=level, row=1, col=1, line_dash="dot", line_width=1,
+                line_color="rgba(167,139,250,.55)", annotation_text=f"Fib {ratio}",
+            )
+    for pattern in analysis.get("patterns", []):
+        anchors = pattern["anchors"]
+        fig.add_trace(go.Scatter(
+            x=[anchor["time"] for anchor in anchors], y=[anchor["price"] for anchor in anchors],
+            mode="lines+markers", line=dict(color="#a78bfa", width=2, dash="dash"),
+            marker=dict(size=7), name=pattern["kind"].replace("_", " ").title(),
+        ), row=1, col=1)
+        status = "confirmed" if pattern["status"] == "confirmed" else "watching"
+        for label, value, color in (
+            (f"{status} neckline", pattern["neckline"], "#60a5fa"),
+            ("pattern target", pattern["target"], "#34d399"),
+            ("pattern invalidation", pattern["invalidation"], "#fb7185"),
+        ):
+            fig.add_hline(y=value, row=1, col=1, line_dash="dash", line_color=color, annotation_text=label)
+    if not trade_plan:
+        return
+    entry = trade_plan.get("entry_zone", {})
+    levels = (
+        ("Entry low", entry.get("low"), "rgba(52,211,153,.55)"),
+        ("Entry high", entry.get("high"), "rgba(52,211,153,.55)"),
+        ("Confirmation", trade_plan.get("confirmation_price"), "#60a5fa"),
+        ("Stop", trade_plan.get("stop_loss"), "#fb7185"),
+    )
+    targets = trade_plan.get("targets", [])
+    levels += tuple((f"Target {index + 1}", target, "#fbbf24") for index, target in enumerate(targets[:2]))
+    for label, value, color in levels:
+        if isinstance(value, (int, float)):
+            fig.add_hline(y=value, row=1, col=1, line_dash="dot", line_color=color, annotation_text=label)
+    fig.layout.meta = {"pattern_analysis": analysis}
+
+
+def _render_kline_chart(
+    ticker: str, lang: str, key_prefix: str, current_price: Optional[float] = None,
+    trade_plan: Optional[Dict[str, Any]] = None,
+) -> None:
     intervals = ["1m", "5m", "15m", "30m", "60m", "1d"]
     interval_labels = {"1m": "1 min", "5m": "5 min", "15m": "15 min", "30m": "30 min", "60m": "1 hour", "1d": t("chart.daily", lang)}
     controls = st.columns([2, 2, 1])
@@ -665,6 +714,7 @@ def _render_kline_chart(ticker: str, lang: str, key_prefix: str, current_price: 
             interval=interval,
             extended_hours=session_mode == "extended" and interval != "1d",
             current_price=current_price,
+            trade_plan=trade_plan,
         )
     if chart.get("error"):
         st.error(t("chart.error", lang, stage=chart.get("stage", "history"), msg=chart["error"]))
@@ -686,6 +736,23 @@ def _render_kline_chart(ticker: str, lang: str, key_prefix: str, current_price: 
         first=pd.Timestamp(chart["first_bar"]).strftime("%Y-%m-%d %H:%M ET"),
         last=pd.Timestamp(chart["last_bar"]).strftime("%Y-%m-%d %H:%M ET"),
     ))
+    if interval == "1d":
+        patterns = chart["figure"].layout.meta.get("pattern_analysis", {}) if chart["figure"].layout.meta else {}
+        if patterns.get("patterns"):
+            pattern = patterns["patterns"][0]
+            st.caption(t(
+                "chart.pattern_status", lang,
+                pattern=pattern["kind"].replace("_", " ").title(), status=pattern["status"],
+            ))
+        if trade_plan:
+            from pine_export import build_pine_script
+
+            st.download_button(
+                t("chart.download_pine", lang),
+                data=build_pine_script(ticker, trade_plan, patterns),
+                file_name=f"{ticker.lower()}_research.pine", mime="text/plain",
+                key=f"{key_prefix}_pine_download", width="stretch",
+            )
 
 
 def _strategy_fail_warning(strategy_id: str, tech_data: Dict[str, Any]) -> str:
@@ -1374,6 +1441,14 @@ def _render_deep_research_result(
                 target1=_currency(targets[0]),
                 target2=_currency(targets[1]) if len(targets) > 1 else "N/A",
             ))
+
+        chart_visible_key = f"deep_chart_visible_{ticker}"
+        if st.button(t("chart.show", lang), key=f"deep_chart_button_{ticker}", width="stretch"):
+            st.session_state[chart_visible_key] = not st.session_state.get(chart_visible_key, False)
+        if st.session_state.get(chart_visible_key, False):
+            _render_kline_chart(
+                ticker, lang, f"deep_chart_{ticker}", technical.get("price"), trade_plan=trade,
+            )
 
         section = st.segmented_control(
             t("deep.detail_section", lang),

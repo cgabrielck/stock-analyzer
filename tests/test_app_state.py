@@ -118,3 +118,46 @@ def test_tech_chart_builds_from_normalized_data_without_quote_lookup(monkeypatch
     assert result["figure"].data[0].type == "candlestick"
     assert all(shape.y0 != 1000 for shape in result["figure"].layout.shapes)
     assert all("$1000.00" not in str(annotation.text) for annotation in result["figure"].layout.annotations)
+    names = {trace.name for trace in result["figure"].data}
+    assert names == {"Price", "50-day trend", "Volume"}
+    assert result["figure"].layout.showlegend is False
+
+
+def test_tech_chart_focuses_latest_daily_candles(monkeypatch) -> None:
+    index = pd.date_range("2025-01-01", periods=120, freq="B", tz="America/New_York")
+    history = pd.DataFrame({
+        "Open": [100 + i * 0.1 for i in range(120)],
+        "High": [101 + i * 0.1 for i in range(120)],
+        "Low": [99 + i * 0.1 for i in range(120)],
+        "Close": [100.5 + i * 0.1 for i in range(120)],
+        "Volume": [1000 + i for i in range(120)],
+    }, index=index)
+    monkeypatch.setattr(
+        "utils.chart_utils.fetch_chart_data",
+        lambda *args, **kwargs: {"data": history, "provider": "test", "interval": "1d", "period": "1y"},
+    )
+
+    result = stock_app._build_tech_chart("TEST")
+
+    assert result["figure"].layout.xaxis.range is not None
+
+
+def test_tech_chart_detail_mode_adds_technical_studies(monkeypatch) -> None:
+    index = pd.date_range("2026-01-01", periods=80, freq="B", tz="America/New_York")
+    history = pd.DataFrame({
+        "Open": [100 + i * 0.1 for i in range(80)],
+        "High": [101 + i * 0.1 for i in range(80)],
+        "Low": [99 + i * 0.1 for i in range(80)],
+        "Close": [100.5 + i * 0.1 for i in range(80)],
+        "Volume": [1000 + i for i in range(80)],
+    }, index=index)
+    monkeypatch.setattr(
+        "utils.chart_utils.fetch_chart_data",
+        lambda *args, **kwargs: {"data": history, "provider": "test", "interval": "1d", "period": "1y"},
+    )
+
+    result = stock_app._build_tech_chart("TEST", detail_mode=True)
+
+    names = {trace.name for trace in result["figure"].data}
+    assert {"SMA20", "EMA20", "SMA50", "RSI", "MACD", "Signal", "MACD Hist"} <= names
+    assert result["figure"].layout.showlegend is True

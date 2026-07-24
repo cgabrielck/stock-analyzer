@@ -563,6 +563,7 @@ def _build_tech_chart(
     extended_hours: bool = False,
     current_price: Optional[float] = None,
     trade_plan: Optional[Dict[str, Any]] = None,
+    detail_mode: bool = False,
 ) -> Dict[str, Any]:
     from plotly.subplots import make_subplots
     import plotly.graph_objects as go
@@ -591,24 +592,27 @@ def _build_tech_chart(
             df["MACD_signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
             df["MACD_hist"] = df["MACD"] - df["MACD_signal"]
 
-        rows = 2 if is_intraday else 4
+        rows = 4 if detail_mode and not is_intraday else 2
         fig = make_subplots(
             rows=rows, cols=1, shared_xaxes=True, vertical_spacing=0.025,
-            row_heights=[0.72, 0.28] if is_intraday else [0.52, 0.14, 0.14, 0.2],
-            subplot_titles=(ticker, "Volume") if is_intraday else (ticker, "Volume", "RSI(14)", "MACD"),
+            row_heights=[0.76, 0.24] if rows == 2 else [0.52, 0.14, 0.14, 0.2],
+            subplot_titles=(ticker, "Volume") if rows == 2 else (ticker, "Volume", "RSI (buy/sell pressure)", "MACD (momentum)"),
         )
         fig.add_trace(go.Candlestick(
             x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"],
             increasing_line_color="#34d399", decreasing_line_color="#fb7185", name="Price",
         ), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df["SMA20"], line=dict(color="#fbbf24", width=1), name="SMA20"), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df["EMA20"], line=dict(color="#22d3c5", width=1), name="EMA20"), row=1, col=1)
+        trend = df["EMA20"] if is_intraday else df["SMA50"]
+        trend_name = "20-period short trend" if is_intraday else "50-day trend"
+        fig.add_trace(go.Scatter(x=df.index, y=trend, line=dict(color="#a78bfa", width=1.5), name=trend_name), row=1, col=1)
         if current_price and float(df["Low"].min()) * 0.8 <= current_price <= float(df["High"].max()) * 1.2:
             fig.add_hline(y=current_price, line_dash="dash", line_color="#60a5fa", annotation_text=f"Now ${current_price:.2f}", row=1, col=1)
         colors = ["#fb7185" if close < open_ else "#34d399" for open_, close in zip(df["Open"], df["Close"])]
         fig.add_trace(go.Bar(x=df.index, y=df["Volume"], marker_color=colors, opacity=0.55, name="Volume"), row=2, col=1)
 
-        if not is_intraday:
+        if detail_mode and not is_intraday:
+            fig.add_trace(go.Scatter(x=df.index, y=df["SMA20"], line=dict(color="#fbbf24", width=1), name="SMA20"), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df["EMA20"], line=dict(color="#22d3c5", width=1), name="EMA20"), row=1, col=1)
             fig.add_trace(go.Scatter(x=df.index, y=df["SMA50"], line=dict(color="#a78bfa", width=1), name="SMA50"), row=1, col=1)
             fig.add_trace(go.Scatter(x=df.index, y=df["BB_upper"], line=dict(color="#64748b", width=1, dash="dot"), name="BB Upper"), row=1, col=1)
             fig.add_trace(go.Scatter(x=df.index, y=df["BB_lower"], line=dict(color="#64748b", width=1, dash="dot"), name="BB Lower"), row=1, col=1)
@@ -619,16 +623,19 @@ def _build_tech_chart(
             fig.add_trace(go.Bar(x=df.index, y=df["MACD_hist"], marker_color=macd_colors, opacity=0.55, name="MACD Hist"), row=4, col=1)
             fig.add_trace(go.Scatter(x=df.index, y=df["MACD"], line=dict(color="#60a5fa", width=1), name="MACD"), row=4, col=1)
             fig.add_trace(go.Scatter(x=df.index, y=df["MACD_signal"], line=dict(color="#fbbf24", width=1), name="Signal"), row=4, col=1)
-            _add_pattern_layers(fig, df, trade_plan)
+        _add_trade_layers(fig, trade_plan, include_all=detail_mode)
+        if detail_mode and not is_intraday:
+            _add_pattern_layers(fig, df)
 
         fig.update_layout(
-            height=560 if is_intraday else 760, template="plotly_dark", paper_bgcolor="#0d1420",
+            height=540 if rows == 2 else 760, template="plotly_dark", paper_bgcolor="#0d1420",
             plot_bgcolor="#0d1420", font=dict(color="#cbd5e1"), xaxis_rangeslider_visible=False,
             margin=dict(l=12, r=12, t=45, b=15), hovermode="x unified", dragmode="pan",
-            showlegend=True, legend=dict(orientation="h", y=1.04, x=0),
+            showlegend=detail_mode, legend=dict(orientation="h", y=1.04, x=0),
         )
         fig.update_xaxes(showgrid=True, gridcolor="rgba(126,145,168,.12)", rangeslider_visible=False)
         fig.update_yaxes(showgrid=True, gridcolor="rgba(126,145,168,.12)", fixedrange=False)
+        _focus_recent_candles(fig, df, is_intraday)
         if not extended_hours or not is_intraday:
             fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
         result["figure"] = fig
@@ -640,7 +647,16 @@ def _build_tech_chart(
         return {**result, "error": f"{type(exc).__name__}: {exc}", "stage": "render"}
 
 
-def _add_pattern_layers(fig: Any, df: pd.DataFrame, trade_plan: Optional[Dict[str, Any]]) -> None:
+def _focus_recent_candles(fig: Any, df: pd.DataFrame, is_intraday: bool) -> None:
+    visible_bars = 120 if is_intraday else 90
+    if len(df) <= visible_bars:
+        return
+    start = df.index[-visible_bars]
+    step = df.index[-1] - df.index[-2]
+    fig.update_xaxes(range=[start, df.index[-1] + step * 5])
+
+
+def _add_pattern_layers(fig: Any, df: pd.DataFrame) -> None:
     from agents.pattern_analyzer import analyze_patterns
     import plotly.graph_objects as go
 
@@ -667,46 +683,66 @@ def _add_pattern_layers(fig: Any, df: pd.DataFrame, trade_plan: Optional[Dict[st
             ("pattern invalidation", pattern["invalidation"], "#fb7185"),
         ):
             fig.add_hline(y=value, row=1, col=1, line_dash="dash", line_color=color, annotation_text=label)
+    fig.layout.meta = {"pattern_analysis": analysis}
+
+
+def _add_trade_layers(fig: Any, trade_plan: Optional[Dict[str, Any]], include_all: bool) -> None:
     if not trade_plan:
         return
     entry = trade_plan.get("entry_zone", {})
+    low, high = entry.get("low"), entry.get("high")
+    if isinstance(low, (int, float)) and isinstance(high, (int, float)) and low < high and not include_all:
+        fig.add_hrect(
+            y0=low, y1=high, row=1, col=1, fillcolor="rgba(52,211,153,.16)",
+            line_width=0, annotation_text="Entry zone", annotation_position="top left",
+        )
     levels = (
-        ("Entry low", entry.get("low"), "rgba(52,211,153,.55)"),
-        ("Entry high", entry.get("high"), "rgba(52,211,153,.55)"),
-        ("Confirmation", trade_plan.get("confirmation_price"), "#60a5fa"),
         ("Stop", trade_plan.get("stop_loss"), "#fb7185"),
     )
+    if include_all:
+        levels = (("Entry low", low, "rgba(52,211,153,.55)"), ("Entry high", high, "rgba(52,211,153,.55)")) + levels
     targets = trade_plan.get("targets", [])
-    levels += tuple((f"Target {index + 1}", target, "#fbbf24") for index, target in enumerate(targets[:2]))
+    levels += (("Target 1", targets[0], "#fbbf24"),) if targets else ()
+    if include_all:
+        levels += (("Confirmation", trade_plan.get("confirmation_price"), "#60a5fa"),)
+        levels += tuple((f"Target {index + 1}", target, "#fbbf24") for index, target in enumerate(targets[1:], start=2))
     for label, value, color in levels:
         if isinstance(value, (int, float)):
             fig.add_hline(y=value, row=1, col=1, line_dash="dot", line_color=color, annotation_text=label)
-    fig.layout.meta = {"pattern_analysis": analysis}
 
 
 def _render_kline_chart(
     ticker: str, lang: str, key_prefix: str, current_price: Optional[float] = None,
     trade_plan: Optional[Dict[str, Any]] = None,
 ) -> None:
-    intervals = ["1m", "5m", "15m", "30m", "60m", "1d"]
-    interval_labels = {"1m": "1 min", "5m": "5 min", "15m": "15 min", "30m": "30 min", "60m": "1 hour", "1d": t("chart.daily", lang)}
+    intervals = ["1d", "60m", "15m", "1m"]
+    interval_labels = {
+        "1d": t("chart.horizon_year", lang), "60m": t("chart.horizon_short", lang),
+        "15m": t("chart.horizon_entry", lang), "1m": t("chart.horizon_today", lang),
+    }
     controls = st.columns([2, 2, 1])
     with controls[0]:
         interval = st.selectbox(
-            t("chart.interval", lang), intervals, format_func=lambda value: interval_labels[value],
-            index=5, key=f"{key_prefix}_interval",
+            t("chart.horizon", lang), intervals, format_func=interval_labels.get,
+            key=f"{key_prefix}_interval",
         )
     with controls[1]:
-        session_mode = st.radio(
-            t("chart.session", lang), ["regular", "extended"], horizontal=True,
-            format_func=lambda value: t(f"chart.{value}", lang), key=f"{key_prefix}_session",
-            disabled=interval == "1d",
-        )
+        detail_mode = st.toggle(t("chart.detail_mode", lang), value=False, key=f"{key_prefix}_detail")
     with controls[2]:
         if st.button(t("chart.refresh", lang), key=f"{key_prefix}_refresh", width="stretch"):
             from utils.chart_utils import fetch_chart_data
             fetch_chart_data.clear()
             st.rerun()
+    session_mode = "regular"
+    if interval != "1d":
+        session_mode = st.radio(
+            t("chart.session", lang), ["regular", "extended"], horizontal=True,
+            format_func=lambda value: t(f"chart.{value}", lang), key=f"{key_prefix}_session",
+        )
+    st.caption(t("chart.detail_explainer" if detail_mode else "chart.simple_explainer", lang))
+    st.caption(t("chart.gesture_hint", lang))
+    if detail_mode:
+        st.info(t("chart.indicator_guide", lang))
 
     with st.spinner(t("chart.loading", lang)):
         chart = _build_tech_chart(
@@ -715,6 +751,7 @@ def _render_kline_chart(
             extended_hours=session_mode == "extended" and interval != "1d",
             current_price=current_price,
             trade_plan=trade_plan,
+            detail_mode=detail_mode,
         )
     if chart.get("error"):
         st.error(t("chart.error", lang, stage=chart.get("stage", "history"), msg=chart["error"]))
@@ -723,9 +760,9 @@ def _render_kline_chart(
     st.plotly_chart(
         chart["figure"], width="stretch", theme=None, key=f"{key_prefix}_plot",
         config={
-            "modeBarButtonsToAdd": ["drawline", "eraseshape"],
-            "modeBarButtonsToRemove": ["sendDataToCloud", "lasso2d", "select2d"],
-            "displayModeBar": True,
+            "modeBarButtonsToAdd": ["drawline", "eraseshape"] if detail_mode else [],
+            "modeBarButtonsToRemove": ["sendDataToCloud", "lasso2d", "select2d", "zoom2d", "pan2d", "autoScale2d", "resetScale2d"],
+            "displayModeBar": detail_mode,
             "displaylogo": False,
             "scrollZoom": True,
             "responsive": True,
@@ -738,13 +775,13 @@ def _render_kline_chart(
     ))
     if interval == "1d":
         patterns = chart["figure"].layout.meta.get("pattern_analysis", {}) if chart["figure"].layout.meta else {}
-        if patterns.get("patterns"):
+        if detail_mode and patterns.get("patterns"):
             pattern = patterns["patterns"][0]
             st.caption(t(
                 "chart.pattern_status", lang,
                 pattern=pattern["kind"].replace("_", " ").title(), status=pattern["status"],
             ))
-        if trade_plan:
+        if trade_plan and detail_mode:
             from pine_export import build_pine_script
 
             st.download_button(

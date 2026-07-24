@@ -26,6 +26,8 @@ ACCOUNT_KEYS = {
     "alerts.target_1", "alerts.target_2", "alerts.confirm", "alerts.save", "alerts.saved_pending",
     "alerts.saved_monitoring", "alerts.inbox", "alerts.inbox_empty", "alerts.inbox_event", "alerts.mark_read",
     "chart.pattern_status", "chart.download_pine",
+    "chart.horizon", "chart.horizon_year", "chart.horizon_short", "chart.horizon_entry", "chart.horizon_today",
+    "chart.detail_mode", "chart.simple_explainer", "chart.detail_explainer", "chart.gesture_hint", "chart.indicator_guide",
     "deep.sec_evidence", "deep.sec_filing_meta", "deep.sec_view_filing", "deep.sec_source_caption",
     "deep.sec_excerpt_note", "deep.sec_unavailable", "deep.sec_timeout", "deep.sec_not_found",
     "portfolio.portfolio_volatility", "portfolio.daily_var_95", "portfolio.history_coverage",
